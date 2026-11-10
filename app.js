@@ -578,7 +578,7 @@ function combinarCampanas(a, b, d) {          // suma a la campaña a lo que tra
   b.puntos.forEach(pb => {
     const i = a.puntos.findIndex(x => x.id === pb.id);
     if (i >= 0) { const pa = a.puntos[i]; ["cota", "cota_origen", "alt_gps", "alt_acc", "acc"].forEach(k => { if (vacio(pa[k]) && !vacio(pb[k])) pa[k] = pb[k]; }); const h = {...(pb.hid || {})}; Object.entries(pa.hid || {}).forEach(([k, v]) => { if (!vacio(v)) h[k] = v; }); pa.hid = h; ult = i; }
-    else { a.puntos.splice(ult + 1, 0, pb); ult++; r.pt++; }
+    else { if (ult < 0) { a.puntos.push(pb); } else { a.puntos.splice(ult + 1, 0, pb); ult++; } r.pt++; }
   });
   b.tramos.forEach(t => { if (!a.tramos.some(x => x.id === t.id)) a.tramos.push(t); });
   Object.entries(b.registros || {}).forEach(([id, rb]) => {
@@ -665,6 +665,12 @@ function pintarGuardar() {
         if (op === "cancelar") return msgArchivo("Carga cancelada.");
         if (op === "reemplazar") return colocar(k, blobs);
         const resumen = combinarCampanas(prev, k, d); if (blobs) blobs.forEach((bl, id) => FDB.poner({id, camp: prev.id, blob: bl})); DB.activa = prev.id; guardar(); pintarCabecera(); pintarGuardar(); msgArchivo("✔ Combinada con «" + prev.nombre + "»: " + resumen); });
+      const act = DB.campanas.find(x => x.id === DB.activa);
+      if (act && !act.puntos.length && !(act.fotos || []).length && DB.campanas.length === 1) { DB.campanas = []; return colocar(k, blobs); }
+      if (act) return decidir("Este archivo es de otra campaña («" + k.nombre + "»). Si es lo que registró otra persona del mismo ensayo, súmelo a la campaña activa «" + act.nombre + "».", [["sumar", "Sumar a «" + act.nombre + "» (datos de otra persona)"], ["aparte", "Cargar como campaña aparte"], ["cancelar", "Cancelar"]]).then(op => {
+        if (op === "cancelar") return msgArchivo("Carga cancelada.");
+        if (op === "aparte") return colocar(k, blobs);
+        const resumen = combinarCampanas(act, k, d); if (blobs) blobs.forEach((bl, id) => FDB.poner({id, camp: act.id, blob: bl})); guardar(); pintarCabecera(); pintarGuardar(); msgArchivo("✔ Sumada a «" + act.nombre + "»: " + resumen + " Revise el orden de los puntos (↑ ↓) en la pestaña Puntos."); });
       colocar(k, blobs);
     } catch (e) { msgArchivo(e instanceof SyntaxError ? "El archivo no es un .json válido (¿está incompleto o es otro tipo de archivo?)." : "No se pudo cargar: " + e.message, true); } };
   const leer = f => new Promise((res, rej) => { try { f.text().then(res, () => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error("leer")); r.readAsText(f); }); } catch (e) { rej(e); } });
