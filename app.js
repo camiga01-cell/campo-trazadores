@@ -1,0 +1,371 @@
+"use strict";
+// Campo · trazadores: app autónoma (sin servidor). Datos en el teléfono (localStorage); se exportan a JSON / CSV / GPX / KML.
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const nf = (v, d = 1) => v === null || v === undefined || !isFinite(v) ? "—" : Number(v).toLocaleString("es-CO", {minimumFractionDigits: d, maximumFractionDigits: d});
+const pad = n => String(n).padStart(2, "0");
+const horaTxt = f => pad(f.getHours()) + ":" + pad(f.getMinutes()) + ":" + pad(f.getSeconds());
+const ROLES = [["inyeccion", "Inyección del trazador"], ["monitoreo", "Estación de monitoreo"], ["vertimiento", "Vertimiento"], ["afluente", "Afluente"], ["otro", "Otro"]];
+const PARAM0 = {tipo_inyeccion: 1, mult_pico: 10, dec_min: 30, k: 0.5, pureza: 0.95, f_seguridad: 1.5, solubilidad_g_l: 250, alpha_t: 0.6};
+const AJ0 = {acc_max: 20, paso_min: 3, seg_promedio: 10};
+
+// ------------------------------------------------------------------ geometría
+const R_T = 6371008.8, rad = g => g * Math.PI / 180;
+function hav(a, b) { const dl = rad(b[0] - a[0]), dn = rad(b[1] - a[1]), x = Math.sin(dl / 2) ** 2 + Math.cos(rad(a[0])) * Math.cos(rad(b[0])) * Math.sin(dn / 2) ** 2; return 2 * R_T * Math.asin(Math.sqrt(x)); }
+const longitud = pts => pts.reduce((s, p, i) => i ? s + hav(pts[i - 1], p) : 0, 0);
+
+// ------------------------------------------------------------------ cálculo del ensayo (Fischer et al. 1979; mismo cálculo de la plataforma)
+const G = 9.81, C_FISCHER = 0.011;
+function programar(est, P) {
+  if (!est.length) throw new Error("Se necesita al menos una estación de monitoreo aguas abajo de la inyección.");
+  for (const k of ["mult_pico", "dec_min", "k", "pureza", "f_seguridad", "solubilidad_g_l", "alpha_t"]) if (!(P[k] > 0)) throw new Error("El parámetro «" + k + "» debe ser mayor que 0.");
+  if (P.pureza > 1) throw new Error("La pureza debe estar entre 0 y 1.");
+  const coef = P.tipo_inyeccion === 1 ? 0.4 : 0.1, out = [], adv = [];
+  let varAc = 0, tAc = 0, xPrev = 0;
+  for (const e of est) {
+    const nom = e.nombre || "Estación", etq = {x_m: "la distancia", q_m3s: "el caudal", ancho_m: "el ancho", prof_m: "la profundidad", pendiente: "la pendiente"};
+    for (const k of Object.keys(etq)) if (!(e[k] > 0)) throw new Error("«" + nom + "»: falta " + etq[k] + (k === "x_m" ? " (grabe el recorrido o escríbala)." : "."));
+    if (e.x_m <= xPrev) throw new Error("La distancia de «" + nom + "» (" + nf(e.x_m, 0) + " m) debe ser mayor que la de la anterior (" + nf(xPrev, 0) + " m).");
+    const u = e.q_m3s / (e.ancho_m * e.prof_m), uEst = Math.sqrt(G * e.prof_m * e.pendiente);
+    const dEst = C_FISCHER * u * u * e.ancho_m * e.ancho_m / (e.prof_m * uEst), DL = e.d_l_medido > 0 ? e.d_l_medido : dEst;
+    const dx = e.x_m - xPrev, tTramo = e.tiempo_tramo_s > 0 ? e.tiempo_tramo_s : dx / u, uTr = dx / tTramo;
+    varAc += 2 * DL * dx / Math.pow(uTr, 3); tAc += tTramo;
+    const sigma = Math.sqrt(varAc), epsT = P.alpha_t * e.prof_m * uEst, lMez = coef * u * e.ancho_m * e.ancho_m / epsT;
+    const ruido = Number(e.ruido) || 0, dec = Math.max(P.mult_pico * ruido, P.dec_min), dc = dec * P.k;
+    const masaG = dc * e.q_m3s * Math.sqrt(2 * Math.PI) * sigma, masaKg = masaG / P.pureza * P.f_seguridad / 1000;
+    if (e.x_m < lMez) adv.push("«" + nom + "» queda a " + nf(e.x_m, 0) + " m de la inyección y la mezcla completa necesita " + nf(lMez, 0) + " m: aléjela, inyecte en el centro o mida en varias verticales.");
+    out.push({id: e.id, nombre: nom, x_m: e.x_m, u, DL, t_pico_s: tAc, t_pico_min: tAc / 60, varianza: varAc, sigma, l_mezcla_m: lMez, mezcla_ok: e.x_m >= lMez, dec_objetivo: dec, masa_kg: masaKg, q: e.q_m3s, ruido});
+    xPrev = e.x_m;
+  }
+  const masa = Math.max(...out.map(s => s.masa_kg));
+  for (const s of out) {
+    s.dec_esperado = masa * 1000 * P.pureza / (s.q * Math.sqrt(2 * Math.PI) * s.sigma) / P.k;
+    s.pico_ruido = s.ruido > 0 ? s.dec_esperado / s.ruido : null;
+    s.ini_min = Math.max(0, (s.t_pico_s - 4 * s.sigma) / 60); s.fin_min = (s.t_pico_s + 8 * s.sigma) / 60;
+    if (s.pico_ruido !== null && s.pico_ruido < 5) adv.push("En «" + s.nombre + "» el pico esperado es solo " + nf(s.pico_ruido, 1) + " veces el ruido (se recomienda más de 5): suba la masa o acerque la estación.");
+  }
+  return {est: out, masa_kg: masa, agua_l: masa * 1000 / P.solubilidad_g_l, adv};
+}
+
+// ------------------------------------------------------------------ estado
+const LS = "ccp-campo-v1";
+let DB = (() => { try { const t = localStorage.getItem(LS); if (t) return JSON.parse(t); } catch (e) {} return {campanas: [], activa: null, ajustes: {...AJ0}}; })();
+DB.ajustes = {...AJ0, ...(DB.ajustes || {})};
+let AVISO_GUARDADO = false;
+function guardar() { try { localStorage.setItem(LS, JSON.stringify(DB)); AVISO_GUARDADO = false; } catch (e) { if (!AVISO_GUARDADO) { AVISO_GUARDADO = true; alert("No se pudo guardar en el teléfono (modo privado o sin espacio). Exporte el archivo ahora desde «Guardar»."); } } }
+function nueva(nombre) {
+  const f = new Date();
+  return {id: "c" + f.getTime().toString(36), nombre: nombre || "Campaña " + f.toISOString().slice(0, 10), fecha: f.toISOString().slice(0, 10), responsable: "", cuadrilla: "", clima: "", observaciones: "",
+    puntos: [], tramos: [], inyeccion: {masa_kg: null, pureza: PARAM0.pureza, agua_l: null, hora: "", t0_iso: null, sal: "", tipo: 1}, params: {...PARAM0}, registros: {}, aforos: [], eventos: [], programacion: null};
+}
+if (!DB.campanas.length) { const c = nueva(); DB.campanas.push(c); DB.activa = c.id; guardar(); }
+const C = () => DB.campanas.find(c => c.id === DB.activa) || DB.campanas[0];
+const pid = () => "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+const punto = id => C().puntos.find(p => p.id === id);
+
+// distancias por el recorrido: puntos en el orden del río (aguas arriba → aguas abajo); cada par consecutivo usa el tramo grabado que los une
+function tramoEntre(a, b) { const T = C().tramos.filter(t => (t.de === a && t.a === b) || (t.de === b && t.a === a)); return T.length ? T[T.length - 1] : null; }
+function enlaces() {
+  const P = C().puntos, L = [];
+  for (let i = 1; i < P.length; i++) {
+    const t = tramoEntre(P[i - 1].id, P[i].id), recta = hav([P[i - 1].lat, P[i - 1].lon], [P[i].lat, P[i].lon]);
+    if (t && t.manual_m > 0) L.push({d: t.manual_m, origen: "escrita"}); else if (t) L.push({d: t.dist_m, origen: "recorrido"});
+    else if (isFinite(recta)) L.push({d: recta, origen: "línea recta"}); else L.push({d: null, origen: "sin dato"});
+  }
+  return L;
+}
+function abscisas() { const L = enlaces(); let s = 0; return C().puntos.map((p, i) => { if (i) s = s === null || L[i - 1].d === null ? null : s + L[i - 1].d; return s; }); }
+function estaciones() {
+  const P = C().puntos, A = abscisas(), ii = P.findIndex(p => p.rol === "inyeccion");
+  if (ii < 0) return [];
+  return P.map((p, i) => ({p, i})).filter(({p, i}) => i > ii && p.rol === "monitoreo").map(({p, i}) => ({id: p.id, nombre: p.nombre, x_m: A[i] === null || A[ii] === null ? null : A[i] - A[ii], q_m3s: p.hid?.q_ls > 0 ? p.hid.q_ls / 1000 : null, ancho_m: p.hid?.ancho_m, prof_m: p.hid?.prof_m,
+    pendiente: p.hid?.pendiente, ec_fondo: p.hid?.ec_fondo, ruido: p.hid?.ruido ?? 3, tiempo_tramo_s: p.hid?.tiempo_tramo_s, d_l_medido: p.hid?.d_l}));
+}
+
+// ------------------------------------------------------------------ GPS
+let watchId = null, ULT = null, REC = null, SEGURA = window.isSecureContext && "geolocation" in navigator, WAKE = null;
+const oyentes = [];
+function iniciarGPS() {
+  if (!SEGURA) { alert("Este navegador no da el GPS en esta dirección: la app debe abrirse con https:// (o instalada). Mientras tanto puede escribir las coordenadas a mano."); return false; }
+  if (watchId !== null) return true;
+  watchId = navigator.geolocation.watchPosition(onFix, e => { $("gps-est").textContent = "GPS: " + (e.code === 1 ? "permiso denegado (active la ubicación para este sitio)" : "sin señal (" + e.message + ")"); }, {enableHighAccuracy: true, maximumAge: 0, timeout: 30000});
+  pedirPantalla(); pintarGPS(); return true;
+}
+function detenerGPS() { if (watchId !== null) navigator.geolocation.clearWatch(watchId); watchId = null; soltarPantalla(); pintarGPS(); }
+async function pedirPantalla() { try { if ("wakeLock" in navigator && !WAKE) { WAKE = await navigator.wakeLock.request("screen"); WAKE.addEventListener("release", () => { WAKE = null; }); } } catch (e) {} }
+function soltarPantalla() { try { WAKE && WAKE.release(); } catch (e) {} WAKE = null; }
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && watchId !== null) pedirPantalla(); });
+function onFix(pos) {
+  ULT = {lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy, t: pos.timestamp};
+  pintarGPS(); oyentes.slice().forEach(f => f(ULT));
+  if (REC) {
+    const A = DB.ajustes, u = REC.pts[REC.pts.length - 1];
+    if (ULT.acc <= A.acc_max && (!u || hav([u[0], u[1]], [ULT.lat, ULT.lon]) >= Math.max(A.paso_min, ULT.acc * 0.5))) { REC.pts.push([ULT.lat, ULT.lon, ULT.t, Math.round(ULT.acc)]); pintarRecorrido(); }
+    else pintarRecorrido();
+  }
+}
+function pintarGPS() {
+  const e = $("gps-est"), b = $("gps-btn");
+  if (!SEGURA) e.textContent = "GPS no disponible aquí (se necesita https://): escriba las coordenadas a mano";
+  else if (watchId === null) e.textContent = "GPS apagado";
+  else if (!ULT) e.textContent = "GPS buscando señal…";
+  else { const ok = ULT.acc <= 10 ? "🟢" : ULT.acc <= 25 ? "🟡" : "🔴"; e.textContent = ok + " ±" + Math.round(ULT.acc) + " m · " + ULT.lat.toFixed(5) + ", " + ULT.lon.toFixed(5); }
+  b.innerHTML = SEGURA ? `<button class="b g p" id="gps-tog">${watchId === null ? "Encender GPS" : "Apagar GPS"}</button>` : "";
+  if ($("gps-tog")) $("gps-tog").onclick = () => watchId === null ? iniciarGPS() : (REC ? alert("Detenga primero el recorrido.") : detenerGPS());
+}
+function fijarPunto(seg) {      // promedia los fixes de unos segundos (media ponderada por 1/precisión²)
+  return new Promise((res, rej) => {
+    if (!iniciarGPS()) return rej(new Error("Sin GPS"));
+    const fx = [], fin = Date.now() + seg * 1000, cb = f => fx.push({...f});
+    oyentes.push(cb);
+    const tic = setInterval(() => { const q = Math.max(0, Math.ceil((fin - Date.now()) / 1000)); const bt = $("pt-fijar"); if (bt) bt.textContent = "Midiendo… " + q + " s (quédese quieto)"; if (Date.now() >= fin) { clearInterval(tic); oyentes.splice(oyentes.indexOf(cb), 1); if (!fx.length && ULT && Date.now() - ULT.t < 15000) fx.push({...ULT}); if (!fx.length) return rej(new Error("No llegó ninguna lectura del GPS: espere a tener señal e intente de nuevo.")); const w = fx.map(f => 1 / Math.max(f.acc, 1) ** 2), sw = w.reduce((a, b) => a + b, 0); res({lat: fx.reduce((s, f, i) => s + f.lat * w[i], 0) / sw, lon: fx.reduce((s, f, i) => s + f.lon * w[i], 0) / sw, acc: Math.min(...fx.map(f => f.acc)), n: fx.length}); } }, 500);
+  });
+}
+
+// ------------------------------------------------------------------ pestañas
+let TAB = "pun";
+document.querySelectorAll("#nav button").forEach(b => b.onclick = () => { TAB = b.dataset.t; mostrar(); });
+function mostrar() {
+  document.querySelectorAll("#nav button").forEach(x => x.classList.toggle("on", x.dataset.t === TAB));
+  document.querySelectorAll("main section").forEach(s => s.classList.toggle("on", s.id === "t-" + TAB));
+  ({pun: pintarPuntos, rec: pintarRecorrido, prog: pintarProg, camp: pintarCampana, exp: pintarGuardar})[TAB]();
+}
+function pintarCabecera() {
+  $("sel-camp").innerHTML = DB.campanas.map(c => `<option value="${c.id}"${c.id === DB.activa ? " selected" : ""}>${esc(c.nombre)}</option>`).join("") + '<option value="__nueva">+ Nueva campaña…</option>';
+}
+$("sel-camp").onchange = ev => { if (ev.target.value === "__nueva") { const n = prompt("Nombre de la nueva campaña (p. ej. el proyecto y la fecha):"); if (n) { const c = nueva(n); DB.campanas.push(c); DB.activa = c.id; guardar(); } } else { if (REC) { alert("Detenga primero el recorrido."); pintarCabecera(); return; } DB.activa = ev.target.value; guardar(); } pintarCabecera(); mostrar(); };
+
+// edición genérica: data-r="ruta.con.puntos" (los índices de arreglos son números); data-t="n" numérico
+function fijar(obj, ruta, v) { const k = ruta.split("."); let o = obj; for (let i = 0; i < k.length - 1; i++) o = o[k[i]]; o[k[k.length - 1]] = v; }
+document.addEventListener("change", ev => {
+  const el = ev.target, r = el.dataset && el.dataset.r; if (!r) return;
+  fijar(C(), r, el.dataset.t === "n" ? (el.value === "" ? null : Number(el.value)) : el.value); guardar();
+  if (el.dataset.re) mostrar();
+});
+const inp = (ruta, tipo, valor, extra = "") => `<input data-r="${ruta}" ${tipo === "n" ? 'data-t="n" type="number" step="any" inputmode="decimal"' : tipo === "h" ? 'type="time" step="1"' : tipo === "f" ? 'type="date"' : 'type="text"'} value="${valor === null || valor === undefined ? "" : (typeof valor === "number" ? Number(valor.toPrecision(7)) : esc(valor))}" ${extra}>`;
+const campo = (t, ruta, tipo, valor, extra) => `<label>${t}${inp(ruta, tipo, valor, extra)}</label>`;
+
+// ------------------------------------------------------------------ mapa esquemático (sin internet: puntos y recorridos en metros locales)
+function mapaSVG() {
+  const c = C(), P = c.puntos.filter(p => isFinite(p.lat)), tr = c.tramos.filter(t => t.pts.length > 1);
+  if (!P.length && !(REC && REC.pts.length)) return '<p class="nota">El mapa aparece cuando haya puntos.</p>';
+  const todos = [...P.map(p => [p.lat, p.lon]), ...tr.flatMap(t => t.pts), ...(REC ? REC.pts : [])], la0 = todos.reduce((s, p) => s + p[0], 0) / todos.length, lo0 = todos.reduce((s, p) => s + p[1], 0) / todos.length;
+  const XY = p => [rad(p[1] - lo0) * Math.cos(rad(la0)) * R_T, rad(p[0] - la0) * R_T], pts = todos.map(XY);
+  let x0 = Math.min(...pts.map(p => p[0])), x1 = Math.max(...pts.map(p => p[0])), y0 = Math.min(...pts.map(p => p[1])), y1 = Math.max(...pts.map(p => p[1]));
+  const span = Math.max(x1 - x0, y1 - y0, 30), W = 600, Hh = 340, m = 30, esc_ = Math.min((W - 2 * m) / Math.max(x1 - x0, 30), (Hh - 2 * m) / Math.max(y1 - y0, 30));
+  const X = p => { const q = XY(p); return (m + (q[0] - x0) * esc_).toFixed(1); }, Y = p => { const q = XY(p); return (Hh - m - (q[1] - y0) * esc_).toFixed(1); };
+  const linea = ps => ps.map((p, i) => (i ? "L" : "M") + X(p) + "," + Y(p)).join("");
+  let s = `<svg class="mapa" viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Mapa esquemático">`;
+  tr.forEach(t => { s += `<path d="${linea(t.pts)}" fill="none" stroke="#1F3864" stroke-width="2.5" opacity=".8"/>`; });
+  if (REC && REC.pts.length > 1) s += `<path d="${linea(REC.pts)}" fill="none" stroke="#c0392b" stroke-width="3"/>`;
+  const col = {inyeccion: "#c0392b", monitoreo: "#1F3864", vertimiento: "#8e44ad", afluente: "#2e8b57", otro: "#777"};
+  P.forEach((p, i) => { s += `<circle cx="${X([p.lat, p.lon])}" cy="${Y([p.lat, p.lon])}" r="6" fill="${col[p.rol] || "#777"}" stroke="#fff" stroke-width="2"/><text x="${+X([p.lat, p.lon]) + 9}" y="${+Y([p.lat, p.lon]) + 4}">${i + 1}. ${esc(p.nombre)}</text>`; });
+  if (ULT) s += `<circle cx="${X([ULT.lat, ULT.lon])}" cy="${Y([ULT.lat, ULT.lon])}" r="5" fill="#2b8cff" stroke="#fff" stroke-width="2"/>`;
+  const barra = [10, 20, 50, 100, 200, 500, 1000].find(v => v * esc_ > 60) || 1000;
+  s += `<line x1="${m}" y1="${Hh - 10}" x2="${m + barra * esc_}" y2="${Hh - 10}" stroke="#444" stroke-width="2"/><text x="${m}" y="${Hh - 14}">${barra} m</text><text x="${W - 30}" y="16">N ↑</text></svg>`;
+  return s;
+}
+
+// ------------------------------------------------------------------ PUNTOS
+function pintarPuntos() {
+  const c = C(), A = abscisas(), L = enlaces();
+  const filas = c.puntos.map((p, i) => `<div class="card"><div class="pt"><b>${i + 1}. ${esc(p.nombre)}</b><span><button class="b g p" data-sube="${i}" ${i ? "" : "disabled"}>↑</button> <button class="b g p" data-baja="${i}" ${i < c.puntos.length - 1 ? "" : "disabled"}>↓</button> <button class="b g p" data-q="${i}" style="color:var(--ro)">Quitar</button></span></div>
+    <div class="fila" style="margin-top:.4rem">${campo("Nombre", `puntos.${i}.nombre`, "t", p.nombre, 'data-re="1"')}<label>Función<select data-r="puntos.${i}.rol" data-re="1">${ROLES.map(([v, t]) => `<option value="${v}"${p.rol === v ? " selected" : ""}>${t}</option>`).join("")}</select></label>
+    ${campo("Latitud", `puntos.${i}.lat`, "n", p.lat, 'data-re="1"')}${campo("Longitud", `puntos.${i}.lon`, "n", p.lon, 'data-re="1"')}${campo("Precisión GPS (m)", `puntos.${i}.acc`, "n", p.acc)}</div>
+    ${campo("Notas", `puntos.${i}.notas`, "t", p.notas)}
+    <div class="nota">${A[i] === null ? "" : "Abscisa desde el primer punto: <b>" + nf(A[i], 0) + " m</b>"}${i ? ` · desde el punto anterior: <b>${nf(L[i - 1].d, 0)} m</b> (${L[i - 1].origen})` : ""}</div>
+    <button class="b g p" data-reubicar="${i}" style="margin-top:.3rem">📍 Volver a tomar la ubicación aquí</button></div>`).join("");
+  $("t-pun").innerHTML = `<p class="nota">Registre los puntos <b>como los encuentre en campo</b>, en el orden del río (aguas arriba primero). Puede cambiarlos cuando la planificación cambie.</p>
+    <div class="card"><div class="fila"><label>Nombre del nuevo punto<input id="pt-nombre" type="text" placeholder="p. ej. Inyección, Estación 1…"></label><label>Función<select id="pt-rol">${ROLES.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select></label></div>
+    <div style="display:flex;gap:.5rem;margin-top:.5rem;flex-wrap:wrap"><button class="b" id="pt-fijar" style="flex:2">📍 Marcar punto aquí (GPS)</button><button class="b g" id="pt-manual" style="flex:1">Escribir coordenadas</button></div>
+    <p class="nota">El GPS promedia ${DB.ajustes.seg_promedio} s para mejorar la precisión. Quédese quieto en el punto.</p></div>
+    ${c.puntos.length ? "<h2>Mapa</h2>" + mapaSVG() : ""}
+    <h2>Puntos (${c.puntos.length})</h2>${filas || '<p class="nota">Aún no hay puntos.</p>'}
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap"><button class="b g p" id="pt-inv">⇅ Invertir el orden</button></div>
+    <details class="card"><summary><b>Ajustes del GPS</b></summary><div class="fila" style="margin-top:.4rem"><label>Precisión máxima aceptada (m)<input id="aj-acc" type="number" value="${DB.ajustes.acc_max}"></label><label>Paso mínimo entre lecturas (m)<input id="aj-paso" type="number" value="${DB.ajustes.paso_min}"></label><label>Segundos de promedio por punto<input id="aj-seg" type="number" value="${DB.ajustes.seg_promedio}"></label></div></details>`;
+  const nuevoPunto = (lat, lon, acc) => { const nom = $("pt-nombre").value.trim() || "Punto " + (c.puntos.length + 1); const rol = $("pt-rol").value; c.puntos.push({id: pid(), nombre: nom, rol, lat, lon, acc: acc === null ? null : Math.round(acc), hora_iso: new Date().toISOString(), notas: "", hid: {}}); guardar(); pintarPuntos(); };
+  $("pt-fijar").onclick = async () => { try { $("pt-fijar").disabled = true; const r = await fijarPunto(DB.ajustes.seg_promedio); nuevoPunto(r.lat, r.lon, r.acc); } catch (e) { alert(e.message); pintarPuntos(); } };
+  $("pt-manual").onclick = () => { const t = prompt("Latitud, longitud en grados decimales (p. ej. 4.53596, -74.54319):"); if (!t) return; const m = t.split(/[;,\s]+/).map(Number).filter(isFinite); if (m.length < 2 || Math.abs(m[0]) > 90 || Math.abs(m[1]) > 180) return alert("No se entendió. Use: latitud, longitud."); nuevoPunto(m[0], m[1], null); };
+  document.querySelectorAll("[data-sube]").forEach(b => b.onclick = () => { const i = +b.dataset.sube; [c.puntos[i - 1], c.puntos[i]] = [c.puntos[i], c.puntos[i - 1]]; guardar(); pintarPuntos(); });
+  document.querySelectorAll("[data-baja]").forEach(b => b.onclick = () => { const i = +b.dataset.baja; [c.puntos[i + 1], c.puntos[i]] = [c.puntos[i], c.puntos[i + 1]]; guardar(); pintarPuntos(); });
+  document.querySelectorAll("#t-pun [data-q]").forEach(b => b.onclick = () => { if (confirm("¿Quitar «" + c.puntos[+b.dataset.q].nombre + "»? Se borran también los recorridos que lo tocan.")) { const id = c.puntos[+b.dataset.q].id; c.puntos.splice(+b.dataset.q, 1); c.tramos = c.tramos.filter(t => t.de !== id && t.a !== id); guardar(); pintarPuntos(); } });
+  document.querySelectorAll("[data-reubicar]").forEach(b => b.onclick = async () => { try { b.disabled = true; b.textContent = "Midiendo… quédese quieto"; const r = await fijarPunto(DB.ajustes.seg_promedio), p = c.puntos[+b.dataset.reubicar]; p.lat = r.lat; p.lon = r.lon; p.acc = Math.round(r.acc); guardar(); pintarPuntos(); } catch (e) { alert(e.message); pintarPuntos(); } });
+  $("pt-inv").onclick = () => { c.puntos.reverse(); guardar(); pintarPuntos(); };
+  [["aj-acc", "acc_max"], ["aj-paso", "paso_min"], ["aj-seg", "seg_promedio"]].forEach(([i, k]) => $(i).onchange = () => { DB.ajustes[k] = Math.max(1, Number($(i).value) || AJ0[k]); guardar(); });
+}
+
+// ------------------------------------------------------------------ RECORRIDO
+function pintarRecorrido() {
+  const c = C(), el = $("t-rec");
+  if (TAB !== "rec") return;
+  if (REC && $("rec-vivo")) { $("rec-vivo").innerHTML = vivo(); $("rec-mapa").innerHTML = mapaSVG(); return; }
+  const sel = (id, ex) => `<select id="${id}">${c.puntos.map((p, i) => `<option value="${p.id}">${i + 1}. ${esc(p.nombre)}</option>`).join("")}${ex || ""}</select>`;
+  const L = enlaces();
+  const tabla = c.puntos.length > 1 ? '<div class="scroll"><table><thead><tr><th>Tramo</th><th class="num">Distancia (m)</th><th>De dónde</th><th>Escribir (m)</th></tr></thead><tbody>' + c.puntos.slice(1).map((p, i) => { const t = tramoEntre(c.puntos[i].id, p.id); return `<tr><td>${i + 1}. ${esc(c.puntos[i].nombre)} → ${i + 2}. ${esc(p.nombre)}</td><td class="num"><b>${nf(L[i].d, 0)}</b></td><td>${L[i].origen}${t ? ` (${t.pts.length} lecturas)` : ""}</td><td>${t ? `<input data-man="${t.id}" type="number" step="any" inputmode="decimal" style="width:6rem" value="${t.manual_m || ""}">` : "—"}</td></tr>`; }).join("") + "</tbody></table></div>" : '<p class="nota">Necesita al menos dos puntos.</p>';
+  el.innerHTML = REC ? `<div class="card rec"><b>● Grabando el recorrido</b><div id="rec-vivo">${vivo()}</div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem"><button class="b" id="rec-marca" style="flex:2">📍 Marcar punto aquí (cierra el tramo)</button><button class="b r" id="rec-stop" style="flex:1">■ Detener</button></div></div><div id="rec-mapa">${mapaSVG()}</div>` :
+    `<p class="nota">Camine por la orilla <b>siguiendo el cauce</b> de un punto al siguiente con el GPS grabando: la distancia del tramo es la longitud de lo caminado. Mantenga la pantalla encendida (la app la protege del apagado mientras graba) y la app abierta.</p>
+    <div class="card"><div class="fila"><label>Empezar en el punto${c.puntos.length ? sel("rec-ini") : "<select disabled><option>(marque un punto primero)</option></select>"}</label></div>
+    <button class="b" id="rec-go" style="width:100%;margin-top:.5rem" ${c.puntos.length ? "" : "disabled"}>● Iniciar recorrido</button></div>
+    <h2>Mapa</h2>${mapaSVG()}<h2>Distancias entre puntos</h2>${tabla}
+    <p class="nota">La distancia por GPS suele sobreestimar un poco el camino en tramos cortos (ruido de ±3 a ±10 m). Para tramos muy cortos mida con cinta o escriba la distancia en la última columna; esa prevalece.</p>`;
+  if ($("rec-go")) $("rec-go").onclick = () => { const p = punto($("rec-ini").value); if (!iniciarGPS()) return; REC = {de: p.id, pts: [[p.lat, p.lon, Date.now(), 0]], t0: Date.now()}; pintarRecorrido(); };
+  if ($("rec-marca")) $("rec-marca").onclick = marcarEnRecorrido;
+  if ($("rec-stop")) $("rec-stop").onclick = detenerRecorrido;
+  el.querySelectorAll("[data-man]").forEach(i => i.onchange = () => { const t = c.tramos.find(x => x.id === i.dataset.man); t.manual_m = i.value === "" ? null : Number(i.value); guardar(); pintarRecorrido(); });
+}
+function vivo() { const d = longitud(REC.pts), s = Math.floor((Date.now() - REC.t0) / 1000); return `<div class="kpi" style="margin-top:.4rem"><div><span class="nota">Distancia del tramo</span><b>${nf(d, 0)} m</b></div><div><span class="nota">Lecturas</span><b>${REC.pts.length}</b></div><div><span class="nota">Tiempo</span><b>${pad(Math.floor(s / 60))}:${pad(s % 60)}</b></div></div><p class="nota">${ULT ? "GPS ±" + Math.round(ULT.acc) + " m" + (ULT.acc > DB.ajustes.acc_max ? " — precisión baja: no se están guardando lecturas" : "") : "Esperando señal…"}</p>`; }
+function cerrarTramo(aId) { const c = C(), pts = REC.pts.slice(); const p = punto(aId); if (p) pts.push([p.lat, p.lon, Date.now(), 0]); c.tramos.push({id: "t" + Date.now().toString(36), de: REC.de, a: aId, pts, dist_m: longitud(pts), manual_m: null}); }
+async function marcarEnRecorrido() {
+  if (!ULT) return alert("Aún no hay señal del GPS.");
+  const nom = prompt("Nombre del punto:", "Punto " + (C().puntos.length + 1)); if (nom === null) return;
+  const rolTxt = prompt("Función: 1 Inyección · 2 Estación de monitoreo · 3 Vertimiento · 4 Afluente · 5 Otro", "2"), rol = ROLES[(Number(rolTxt) || 2) - 1]?.[0] || "monitoreo";
+  const p = {id: pid(), nombre: nom || "Punto", rol, lat: ULT.lat, lon: ULT.lon, acc: Math.round(ULT.acc), hora_iso: new Date().toISOString(), notas: "", hid: {}};
+  const c = C(), iDe = c.puntos.findIndex(x => x.id === REC.de);
+  c.puntos.splice(iDe + 1, 0, p);                       // queda justo después del punto de donde salió
+  REC.pts.push([ULT.lat, ULT.lon, ULT.t, Math.round(ULT.acc)]); cerrarTramo(p.id);
+  REC = {de: p.id, pts: [[p.lat, p.lon, Date.now(), 0]], t0: Date.now()}; guardar(); pintarRecorrido();
+}
+function detenerRecorrido() {
+  const c = C(), r = REC; REC = null; if (!c.puntos.length) return pintarRecorrido();
+  if (r.pts.length < 3) { pintarRecorrido(); return; }
+  $("t-rec").innerHTML = `<div class="card"><b>Recorrido detenido</b><p class="nota">${r.pts.length} lecturas, ${nf(longitud(r.pts), 0)} m. ¿En qué punto terminó?</p><div class="fila"><label>Punto de llegada<select id="rec-fin">${c.puntos.filter(p => p.id !== r.de).map(p => `<option value="${p.id}">${c.puntos.indexOf(p) + 1}. ${esc(p.nombre)}</option>`).join("")}</select></label></div>
+    <div style="display:flex;gap:.5rem;margin-top:.5rem"><button class="b" id="rec-ok">Guardar el tramo</button><button class="b g" id="rec-no">Descartar</button></div></div>`;
+  $("rec-ok").onclick = () => { if (!$("rec-fin").value) return alert("Marque primero el punto de llegada."); REC = r; cerrarTramo($("rec-fin").value); REC = null; guardar(); pintarRecorrido(); };
+  $("rec-no").onclick = () => pintarRecorrido();
+}
+setInterval(() => { if (REC && TAB === "rec" && $("rec-vivo")) $("rec-vivo").innerHTML = vivo(); }, 1000);
+
+// ------------------------------------------------------------------ PROGRAMAR
+let RES = null;
+function pintarProg() {
+  const c = C(), E = estaciones(), P = c.params, ii = c.puntos.findIndex(p => p.rol === "inyeccion");
+  let aviso = "";
+  if (ii < 0) aviso = "Falta un punto con función «Inyección del trazador» (pestaña Puntos).";
+  else if (!E.length) aviso = "No hay estaciones de monitoreo aguas abajo de la inyección. Marque las estaciones después de la inyección, en el orden del río.";
+  const H = [["q_ls", "Caudal (L/s)"], ["ancho_m", "Ancho (m)"], ["prof_m", "Profundidad media (m)"], ["pendiente", "Pendiente (m/m)"], ["ec_fondo", "EC de fondo (µS/cm)"], ["ruido", "Ruido ± (µS/cm)"], ["tiempo_tramo_s", "Tiempo de viaje del tramo (s), opcional"], ["d_l", "D_L medido (m²/s), opcional"]];
+  $("t-prog").innerHTML = `<p class="nota">Estima la masa de sal y los tiempos de registro (Fischer et al. 1979, pulso gaussiano). Las distancias salen del recorrido grabado; el caudal, ancho, profundidad y pendiente los mide o estima usted en el sitio (o los trae del modelo hidráulico). Es una estimación: D_L real puede variar de 2 a 5 veces.</p>
+    ${aviso ? '<div class="adv">⚠ ' + aviso + "</div>" : ""}
+    ${E.map(e => { const i = c.puntos.findIndex(p => p.id === e.id); return `<div class="card"><div class="pt"><b>${esc(e.nombre)}</b><span class="badge">${e.x_m === null ? "sin distancia" : nf(e.x_m, 0) + " m desde la inyección"}</span></div><div class="fila" style="margin-top:.4rem">${H.map(([k, t]) => campo(t, `puntos.${i}.hid.${k}`, "n", c.puntos[i].hid?.[k])).join("")}</div></div>`; }).join("")}
+    ${E.length > 1 ? '<button class="b g p" id="pr-copiar">Copiar los datos de la primera estación a las demás (vacíos)</button>' : ""}
+    <details class="card"><summary><b>Parámetros del ensayo</b> <span class="nota">(valores de partida, por confirmar)</span></summary><div class="fila" style="margin-top:.4rem">
+      <label>Inyección<select data-r="params.tipo_inyeccion" data-t="n"><option value="1"${P.tipo_inyeccion == 1 ? " selected" : ""}>Por la orilla</option><option value="2"${P.tipo_inyeccion == 2 ? " selected" : ""}>En el centro</option></select></label>
+      ${[["mult_pico", "Pico / ruido"], ["dec_min", "ΔEC mínimo (µS/cm)"], ["k", "k (mg/L por µS/cm)"], ["pureza", "Pureza de la sal"], ["f_seguridad", "Factor de seguridad"], ["solubilidad_g_l", "Solubilidad (g/L)"], ["alpha_t", "α mezcla transversal"]].map(([k, t]) => campo(t, "params." + k, "n", P[k])).join("")}</div></details>
+    <button class="b" id="pr-calc" style="width:100%">Calcular masa de sal y tiempos</button><div id="pr-res"></div>`;
+  $("pr-calc").onclick = calcular;
+  if ($("pr-copiar")) $("pr-copiar").onclick = () => { const o = c.puntos.find(p => p.id === E[0].id).hid || {}; E.slice(1).forEach(e => { const p = c.puntos.find(x => x.id === e.id); p.hid = p.hid || {}; H.forEach(([k]) => { if (p.hid[k] == null && o[k] != null && k !== "tiempo_tramo_s") p.hid[k] = o[k]; }); }); guardar(); pintarProg(); };
+  if (c.programacion && RES) mostrarResultado();
+}
+function calcular() {
+  const c = C();
+  try { RES = programar(estaciones(), c.params); } catch (e) { RES = null; $("pr-res").innerHTML = '<p class="err">' + esc(e.message) + "</p>"; return; }
+  c.programacion = {masa_kg: RES.masa_kg, agua_l: RES.agua_l, estaciones: RES.est.map(s => ({id: s.id, nombre: s.nombre, x_m: s.x_m, t_pico_min: s.t_pico_min, ini_min: s.ini_min, fin_min: s.fin_min, dec_esperado: s.dec_esperado, l_mezcla_m: s.l_mezcla_m}))}; guardar(); mostrarResultado();
+}
+function mostrarResultado() {
+  const R = RES; if (!R) return;
+  $("pr-res").innerHTML = `<div class="kpi" style="margin:.6rem 0"><div><span class="nota">Masa de sal a inyectar</span><b>${nf(R.masa_kg, 2)} kg</b><span class="nota">sal comercial</span></div><div><span class="nota">Agua mínima para disolverla</span><b>${nf(R.agua_l, 0)} L</b><span class="nota">disuelva y vierta de una vez</span></div></div>` + R.adv.map(a => '<div class="adv">⚠ ' + esc(a) + "</div>").join("") +
+    '<div class="scroll"><table><thead><tr><th>Estación</th><th class="num">Dist. (m)</th><th class="num">u (m/s)</th><th class="num">Pico a los (min)</th><th class="num">Mezcla (m)</th><th class="num">ΔEC esp.</th><th class="num">Pico/ruido</th><th class="num">Iniciar (min)</th><th class="num">Terminar (min)</th></tr></thead><tbody>' +
+    R.est.map(s => `<tr><td>${esc(s.nombre)}</td><td class="num">${nf(s.x_m, 0)}</td><td class="num">${nf(s.u, 3)}</td><td class="num"><b>${nf(s.t_pico_min, 1)}</b></td><td class="num" style="${s.mezcla_ok ? "" : "color:var(--ro);font-weight:600"}">${nf(s.l_mezcla_m, 0)} ${s.mezcla_ok ? "✔" : "⚠"}</td><td class="num">${nf(s.dec_esperado, 0)}</td><td class="num" style="${s.pico_ruido !== null && s.pico_ruido < 5 ? "color:var(--ro);font-weight:600" : ""}">${nf(s.pico_ruido, 1)}</td><td class="num"><b>${nf(s.ini_min, 1)}</b></td><td class="num"><b>${nf(s.fin_min, 1)}</b></td></tr>`).join("") + "</tbody></table></div><div id='pr-graf'></div>" +
+    '<p class="nota">Registre desde antes de inyectar (30–60 min de fondo) y hasta que la cola vuelva al fondo. Pese la masa real y anótela en «Campaña».</p>';
+  curva(R);
+}
+function curva(R) {
+  const W = 640, H = 280, m = {l: 48, r: 10, t: 14, b: 40}, tmax = Math.max(...R.est.map(s => s.t_pico_s + 10 * s.sigma)), ymax = Math.max(...R.est.map(s => s.dec_esperado)) * 1.08, col = ["#1F3864", "#e67e22", "#2e8b57", "#8e44ad", "#c0392b"];
+  const X = t => m.l + t / tmax * (W - m.l - m.r), Y = y => H - m.b - y / ymax * (H - m.t - m.b);
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Curva esperada de ΔEC">`;
+  for (let i = 0; i <= 4; i++) { const y = ymax * i / 4, t = tmax * i / 4; s += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(y)}" y2="${Y(y)}" stroke="#e3e6ee"/><text x="${m.l - 4}" y="${Y(y) + 4}" text-anchor="end">${y.toFixed(0)}</text><text x="${X(t)}" y="${H - m.b + 14}" text-anchor="middle">${(t / 60).toFixed(0)}</text>`; }
+  R.est.forEach((e, i) => { let d = ""; for (let j = 0; j <= 160; j++) { const t = tmax * j / 160, y = e.dec_esperado * Math.exp(-Math.pow(t - e.t_pico_s, 2) / (2 * e.varianza)); d += (j ? "L" : "M") + X(t).toFixed(1) + "," + Y(y).toFixed(1); }
+    s += `<rect x="${X(e.ini_min * 60)}" y="${m.t}" width="${X(e.fin_min * 60) - X(e.ini_min * 60)}" height="${H - m.t - m.b}" fill="${col[i % 5]}" opacity=".07"/><path d="${d}" fill="none" stroke="${col[i % 5]}" stroke-width="2.2"/><text x="${X(e.t_pico_s)}" y="${Y(e.dec_esperado) - 5}" text-anchor="middle" fill="${col[i % 5]}">${esc(e.nombre)}</text>`; });
+  s += `<text x="${W / 2}" y="${H - 4}" text-anchor="middle">Tiempo desde la inyección (min)</text><text transform="translate(11,${H / 2}) rotate(-90)" text-anchor="middle">ΔEC esperado (µS/cm)</text></svg>`;
+  $("pr-graf").innerHTML = s;
+}
+
+// ------------------------------------------------------------------ CAMPAÑA (bitácora)
+function t0() { const c = C(); return c.inyeccion.t0_iso ? new Date(c.inyeccion.t0_iso) : null; }
+function fechaHora(h) { const c = C(), f = new Date((c.fecha || new Date().toISOString().slice(0, 10)) + "T00:00:00"), [a, b, s] = h.split(":").map(Number); f.setHours(a, b, s || 0, 0); return f; }
+function evento(txt) { C().eventos.push({iso: new Date().toISOString(), hora: horaTxt(new Date()), texto: txt}); guardar(); }
+function pintarCampana() {
+  const c = C(), I = c.inyeccion, E = c.puntos.filter(p => p.rol === "monitoreo"), prog = id => c.programacion?.estaciones.find(e => e.id === id), T0 = t0(), ahora = new Date();
+  const ptsEst = E.map(p => { const i = c.puntos.indexOf(p), R = c.registros[p.id] || (c.registros[p.id] = {}), pr = prog(p.id); let est = "", cl = "";
+    if (pr && T0) { const ini = new Date(T0.getTime() + pr.ini_min * 60000), fin = new Date(T0.getTime() + pr.fin_min * 60000), pico = new Date(T0.getTime() + pr.t_pico_min * 60000); cl = ahora > fin ? "ya" : (ahora >= ini ? "ahora" : "");
+      est = `<div class="nota">Iniciar el registro: <b>${horaTxt(ini)}</b> · pico esperado: <b>${horaTxt(pico)}</b> · terminar: <b>${horaTxt(fin)}</b></div>` + (cl === "ahora" ? '<span class="badge" style="background:var(--ro);color:#fff">REGISTRANDO AHORA</span>' : cl === "ya" ? '<span class="badge">ventana terminada</span>' : ""); }
+    else est = '<div class="nota">Calcule la programación (pestaña Programar) y marque la hora de inyección para ver las horas.</div>';
+    return `<div class="card est ${cl}"><b>${esc(p.nombre)}</b>${est}<div class="fila" style="margin-top:.4rem">${campo("Sonda / serie", `registros.${p.id}.sonda`, "t", R.sonda)}${campo("Inicio real", `registros.${p.id}.inicio`, "h", R.inicio)}${campo("Fin real", `registros.${p.id}.fin`, "h", R.fin)}${campo("EC de fondo medida (µS/cm)", `registros.${p.id}.ec_fondo`, "n", R.ec_fondo)}${campo("Llegada del pico", `registros.${p.id}.pico`, "h", R.pico)}</div>${campo("Notas", `registros.${p.id}.notas`, "t", R.notas)}<button class="b g p" data-pico="${p.id}" style="margin-top:.4rem">Hora actual = pico</button></div>`; }).join("");
+  $("t-camp").innerHTML = `<p class="nota">Todo se guarda en este teléfono. Al terminar, vaya a «Guardar» y envíese el archivo.</p>
+    <h2>Datos de la campaña</h2><div class="card fila">${campo("Nombre", "nombre", "t", c.nombre, 'data-re="1"')}${campo("Fecha", "fecha", "f", c.fecha)}${campo("Responsable", "responsable", "t", c.responsable)}${campo("Cuadrilla", "cuadrilla", "t", c.cuadrilla)}${campo("Clima / condición del cauce", "clima", "t", c.clima)}</div>
+    <h2>Inyección del trazador</h2><div class="card"><div class="fila">${campo("Masa de sal pesada (kg)", "inyeccion.masa_kg", "n", I.masa_kg)}${campo("Pureza (fracción)", "inyeccion.pureza", "n", I.pureza)}${campo("Agua usada (L)", "inyeccion.agua_l", "n", I.agua_l)}${campo("Hora real de inyección", "inyeccion.hora", "h", I.hora, 'id="c-hora"')}${campo("Sal (tipo, marca, lote)", "inyeccion.sal", "t", I.sal)}</div>
+    <button class="b" id="c-ahora" style="width:100%;margin-top:.5rem">⏱ Inyecté ahora</button><div class="crono" id="c-crono">—</div><p class="nota" id="c-crono-n" style="text-align:center"></p></div>
+    <h2>Estaciones de registro</h2>${ptsEst || '<p class="nota">No hay estaciones de monitoreo: márquelas en «Puntos».</p>'}
+    <h2>Aforos de campo</h2>${c.aforos.map((a, i) => `<div class="card"><div class="fila">${campo("Punto", `aforos.${i}.punto`, "t", a.punto)}${campo("Q (L/s)", `aforos.${i}.q_ls`, "n", a.q_ls)}${campo("Hora", `aforos.${i}.hora`, "h", a.hora)}${campo("Método", `aforos.${i}.metodo`, "t", a.metodo)}</div><button class="b g p" data-qa="${i}" style="margin-top:.4rem">Quitar</button></div>`).join("")}<button class="b g p" id="c-afo">+ Agregar aforo</button>
+    <h2>Eventos y observaciones</h2><div class="card"><div class="fila"><label style="flex:3">Nota<input id="c-ev-txt" type="text" placeholder="p. ej. sonda en el hilo de la corriente"></label><button class="b" id="c-ev" style="align-self:flex-end">Anotar con la hora</button></div><div class="scroll"><table id="c-evt"></table></div></div>
+    <label>Observaciones generales<textarea data-r="observaciones">${esc(c.observaciones)}</textarea></label>`;
+  $("c-ahora").onclick = () => { const f = new Date(); I.hora = horaTxt(f); I.t0_iso = f.toISOString(); c.fecha = f.toISOString().slice(0, 10); evento("Inyección del trazador"); guardar(); pintarCampana(); };
+  $("c-hora").addEventListener("change", () => { const h = $("c-hora").value; I.hora = h; I.t0_iso = h ? fechaHora(h).toISOString() : null; guardar(); pintarCampana(); });
+  document.querySelectorAll("[data-pico]").forEach(b => b.onclick = () => { (c.registros[b.dataset.pico]).pico = horaTxt(new Date()); evento("Pico visto en " + punto(b.dataset.pico).nombre); pintarCampana(); });
+  $("c-afo").onclick = () => { c.aforos.push({punto: "", q_ls: null, hora: horaTxt(new Date()).slice(0, 5), metodo: ""}); guardar(); pintarCampana(); };
+  document.querySelectorAll("[data-qa]").forEach(b => b.onclick = () => { c.aforos.splice(+b.dataset.qa, 1); guardar(); pintarCampana(); });
+  $("c-ev").onclick = () => { const t = $("c-ev-txt").value.trim(); if (!t) return; evento(t); pintarCampana(); };
+  $("c-evt").innerHTML = c.eventos.length ? "<tbody>" + c.eventos.slice().reverse().map(e => `<tr><td style="white-space:nowrap"><b>${e.hora}</b></td><td>${esc(e.texto)}</td></tr>`).join("") + "</tbody>" : "";
+}
+setInterval(() => { const T = TAB === "camp" && $("c-crono") ? t0() : null; if (!T) { if ($("c-crono")) $("c-crono").textContent = "—"; return; } let s = Math.floor((Date.now() - T.getTime()) / 1000); const neg = s < 0; s = Math.abs(s); $("c-crono").textContent = (neg ? "−" : "") + pad(Math.floor(s / 3600)) + ":" + pad(Math.floor(s % 3600 / 60)) + ":" + pad(s % 60); $("c-crono-n").textContent = "tiempo desde la inyección"; }, 1000);
+
+// ------------------------------------------------------------------ GUARDAR (exportar / importar)
+const slug = t => (t || "campana").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9]+/g, "_").slice(0, 40);
+const base = () => "campo_trazadores_" + slug(C().nombre) + "_" + C().fecha;
+function descargar(blob, nombre) { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = nombre; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); }
+function datosExport() {
+  const c = C(), A = abscisas(), L = enlaces(), ii = c.puntos.findIndex(p => p.rol === "inyeccion");
+  return {formato: "ccp-bitacora-trazadores", version: 2, proyecto_id: null, campana_id: c.id, exportado: new Date().toISOString(), campana: {nombre: c.nombre, fecha: c.fecha, responsable: c.responsable, cuadrilla: c.cuadrilla, clima: c.clima},
+    inyeccion: {masa_kg: c.inyeccion.masa_kg, pureza: c.inyeccion.pureza, agua_l: c.inyeccion.agua_l, hora: c.inyeccion.hora, t0_iso: c.inyeccion.t0_iso, sal: c.inyeccion.sal, punto: c.puntos[ii]?.nombre || ""},
+    puntos: c.puntos.map((p, i) => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, precision_m: p.acc, notas: p.notas, abscisa_m: A[i], dist_anterior_m: i ? L[i - 1].d : null, origen_distancia: i ? L[i - 1].origen : null, dist_desde_inyeccion_m: ii >= 0 && A[i] !== null && A[ii] !== null ? A[i] - A[ii] : null, hidraulica: p.hid})),
+    tramos: c.tramos, parametros: c.params, programacion: c.programacion, registro_estaciones: Object.fromEntries(Object.entries(c.registros).map(([id, r]) => [punto(id)?.nombre || id, r])), aforos: c.aforos, eventos: c.eventos, observaciones: c.observaciones};
+}
+const blobJson = () => new Blob([JSON.stringify(datosExport(), null, 1)], {type: "application/json"});
+function csv() {
+  const c = C(), d = datosExport(), q = v => '"' + String(v ?? "").replace(/"/g, '""') + '"', L = [];
+  L.push(["Campaña", c.nombre], ["Fecha", c.fecha], ["Responsable", c.responsable], ["Cuadrilla", c.cuadrilla], ["Condiciones", c.clima], [], ["Masa de sal (kg)", c.inyeccion.masa_kg], ["Pureza", c.inyeccion.pureza], ["Agua (L)", c.inyeccion.agua_l], ["Hora de inyección", c.inyeccion.hora], ["Sal", c.inyeccion.sal], [],
+    ["N°", "Punto", "Función", "Latitud", "Longitud", "Precisión (m)", "Abscisa (m)", "Dist. al anterior (m)", "Origen de la distancia", "Dist. desde inyección (m)", "Sonda", "Inicio real", "Fin real", "EC fondo", "Hora del pico", "Notas"]);
+  d.puntos.forEach((p, i) => { const r = c.registros[p.id] || {}; L.push([i + 1, p.nombre, p.rol, p.lat, p.lon, p.precision_m, p.abscisa_m?.toFixed(1), p.dist_anterior_m?.toFixed(1), p.origen_distancia, p.dist_desde_inyeccion_m?.toFixed(1), r.sonda, r.inicio, r.fin, r.ec_fondo, r.pico, p.notas || r.notas]); });
+  L.push([], ["Aforo: punto", "Q (L/s)", "Hora", "Método"]); c.aforos.forEach(a => L.push([a.punto, a.q_ls, a.hora, a.metodo]));
+  L.push([], ["Hora", "Evento"]); c.eventos.forEach(e => L.push([e.hora, e.texto])); L.push([], ["Observaciones", c.observaciones]);
+  return new Blob(["﻿" + L.map(r => r.map(q).join(";")).join("\r\n")], {type: "text/csv;charset=utf-8"});
+}
+function gpx() {
+  const c = C(), x = esc;
+  return new Blob([`<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Campo trazadores" xmlns="http://www.topografix.com/GPX/1/1">\n<metadata><name>${x(c.nombre)}</name></metadata>\n` + c.puntos.filter(p => isFinite(p.lat)).map(p => `<wpt lat="${p.lat}" lon="${p.lon}"><name>${x(p.nombre)}</name><desc>${x(ROLES.find(r => r[0] === p.rol)?.[1] || "")}${p.acc ? " · ±" + p.acc + " m" : ""}</desc></wpt>`).join("\n") + "\n" +
+    c.tramos.map(t => `<trk><name>${x((punto(t.de)?.nombre || "?") + " → " + (punto(t.a)?.nombre || "?"))}</name><trkseg>` + t.pts.map(p => `<trkpt lat="${p[0]}" lon="${p[1]}">${p[2] ? "<time>" + new Date(p[2]).toISOString() + "</time>" : ""}</trkpt>`).join("") + "</trkseg></trk>").join("\n") + "\n</gpx>\n"], {type: "application/gpx+xml"});
+}
+function kml() {                                           // puntos + el recorrido completo en el orden del río (para cargarlos en el paso 1 de la plataforma)
+  const c = C(), x = esc; let ruta = [];
+  for (let i = 1; i < c.puntos.length; i++) { const a = c.puntos[i - 1], b = c.puntos[i], t = tramoEntre(a.id, b.id); let ps = t ? t.pts.map(p => [p[0], p[1]]) : [[a.lat, a.lon], [b.lat, b.lon]]; if (t && t.de === b.id) ps = ps.reverse(); ruta = ruta.concat(ps); }
+  return new Blob([`<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${x(c.nombre)}</name>\n` + c.puntos.filter(p => isFinite(p.lat)).map(p => `<Placemark><name>${x(p.nombre)}</name><description>${x(ROLES.find(r => r[0] === p.rol)?.[1] || "")}${p.acc ? " · ±" + p.acc + " m" : ""}</description><Point><coordinates>${p.lon},${p.lat},0</coordinates></Point></Placemark>`).join("\n") +
+    (ruta.length > 1 ? `\n<Placemark><name>Recorrido</name><LineString><tessellate>1</tessellate><coordinates>${ruta.map(p => p[1] + "," + p[0] + ",0").join(" ")}</coordinates></LineString></Placemark>` : "") + "\n</Document></kml>\n"], {type: "application/vnd.google-earth.kml+xml"});
+}
+let PROMPT_INSTALAR = null;
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); PROMPT_INSTALAR = e; if (TAB === "exp") pintarGuardar(); });
+function pintarGuardar() {
+  const c = C(), ios = /iphone|ipad/i.test(navigator.userAgent), instalada = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  $("t-exp").innerHTML = `<h2>Sacar los datos del teléfono</h2><p class="nota">Campaña: <b>${esc(c.nombre)}</b> · ${c.puntos.length} puntos · ${c.tramos.length} tramos grabados.</p>
+    <div class="card"><button class="b" id="x-comp" style="width:100%;margin:.2rem 0">Compartir / enviar (WhatsApp, correo, Drive…)</button>
+    <button class="b g" id="x-json" style="width:100%;margin:.2rem 0">Descargar todo (.json) — para la plataforma</button><button class="b g" id="x-kml" style="width:100%;margin:.2rem 0">Puntos y recorrido (.kml) — para Google Earth y el paso 1</button>
+    <button class="b g" id="x-gpx" style="width:100%;margin:.2rem 0">Puntos y recorrido (.gpx)</button><button class="b g" id="x-csv" style="width:100%;margin:.2rem 0">Resumen (.csv) — para Excel</button><p class="nota" id="x-msg"></p></div>
+    <h2>Cargar una campaña guardada</h2><div class="card"><input type="file" id="x-file" accept=".json,application/json"><p class="nota">Para continuar una campaña o pasarla de un teléfono a otro (el .json de «Descargar todo»).</p></div>
+    <h2>Campañas en este teléfono</h2><div class="card">${DB.campanas.map(k => `<div class="pt" style="padding:.25rem 0"><span>${esc(k.nombre)} <span class="nota">(${k.puntos.length} puntos)</span></span>${DB.campanas.length > 1 ? `<button class="b g p" data-del="${k.id}" style="color:var(--ro)">Borrar</button>` : ""}</div>`).join("")}</div>
+    <h2>Instalar en el celular</h2><div class="card">${instalada ? "<p>✔ Ya está instalada.</p>" : PROMPT_INSTALAR ? '<button class="b" id="x-inst" style="width:100%">Anclar a la pantalla de inicio</button>' : ios ? '<p class="nota">En iPhone: abra esta página en Safari, toque el botón Compartir y elija «Agregar a pantalla de inicio».</p>' : '<p class="nota">En Android: menú ⋮ del navegador → «Instalar aplicación» o «Agregar a pantalla de inicio». Si no aparece, la página debe abrirse con https://.</p>'}
+    <p class="nota">${"serviceWorker" in navigator && navigator.serviceWorker.controller ? "✔ Guardada para trabajar sin internet." : "Aún no está guardada para usarla sin internet (ábrala una vez con conexión)."}</p></div>`;
+  $("x-json").onclick = () => { descargar(blobJson(), base() + ".json"); $("x-msg").textContent = "Descargado (carpeta Descargas)."; };
+  $("x-csv").onclick = () => descargar(csv(), base() + ".csv"); $("x-gpx").onclick = () => descargar(gpx(), base() + ".gpx"); $("x-kml").onclick = () => descargar(kml(), base() + ".kml");
+  $("x-comp").onclick = async () => { const f = new File([blobJson()], base() + ".json", {type: "application/json"}); if (navigator.canShare && navigator.canShare({files: [f]})) { try { await navigator.share({files: [f], title: c.nombre}); $("x-msg").textContent = "Enviado."; } catch (e) { if (e.name !== "AbortError") $("x-msg").textContent = "No se pudo compartir: " + e.message; } } else { descargar(f, f.name); $("x-msg").textContent = "Este navegador no comparte archivos: se descargó."; } };
+  $("x-file").onchange = async ev => { const f = ev.target.files[0]; if (!f) return; try { const d = JSON.parse(await f.text()); if (d.formato !== "ccp-bitacora-trazadores" || d.version !== 2) throw new Error("No es un archivo de esta app."); const k = nueva(d.campana?.nombre); Object.assign(k, {id: d.campana_id || k.id, nombre: d.campana?.nombre || k.nombre, fecha: d.campana?.fecha || k.fecha, responsable: d.campana?.responsable || "", cuadrilla: d.campana?.cuadrilla || "", clima: d.campana?.clima || "", observaciones: d.observaciones || "",
+      puntos: (d.puntos || []).map(p => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, acc: p.precision_m, notas: p.notas || "", hid: p.hidraulica || {}})), tramos: d.tramos || [], params: {...PARAM0, ...(d.parametros || {})}, aforos: d.aforos || [], eventos: d.eventos || [], programacion: d.programacion || null,
+      inyeccion: {...k.inyeccion, masa_kg: d.inyeccion?.masa_kg ?? null, pureza: d.inyeccion?.pureza ?? 0.95, agua_l: d.inyeccion?.agua_l ?? null, hora: d.inyeccion?.hora || "", t0_iso: d.inyeccion?.t0_iso || null, sal: d.inyeccion?.sal || ""}});
+      k.registros = {}; Object.entries(d.registro_estaciones || {}).forEach(([nom, r]) => { const p = k.puntos.find(x => x.nombre === nom); if (p) k.registros[p.id] = r; });
+      DB.campanas = DB.campanas.filter(x => x.id !== k.id); DB.campanas.push(k); DB.activa = k.id; guardar(); pintarCabecera(); pintarGuardar(); $("x-msg").textContent = "Campaña cargada."; } catch (e) { $("x-msg").textContent = "No se pudo leer: " + e.message; } };
+  document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => { const k = DB.campanas.find(x => x.id === b.dataset.del); if (confirm("¿Borrar «" + k.nombre + "» de este teléfono? Si no la descargó, se pierde.")) { DB.campanas = DB.campanas.filter(x => x !== k); if (DB.activa === k.id) DB.activa = DB.campanas[0].id; guardar(); pintarCabecera(); pintarGuardar(); } });
+  if ($("x-inst")) $("x-inst").onclick = async () => { PROMPT_INSTALAR.prompt(); await PROMPT_INSTALAR.userChoice; PROMPT_INSTALAR = null; pintarGuardar(); };
+}
+
+// ------------------------------------------------------------------ arranque
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+window.addEventListener("beforeunload", ev => { if (REC) { ev.preventDefault(); ev.returnValue = ""; } });
+pintarCabecera(); pintarGPS(); mostrar();
