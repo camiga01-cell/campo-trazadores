@@ -377,7 +377,7 @@ const CHECK = ["Sondas encendidas y con la hora del celular sincronizada", "Sal 
 function ens() { const c = C(); return c.ensayo || (c.ensayo = {estado: "preparando", t_fin_iso: null, check: {}, avisos: {}}); }
 function t0() { const c = C(); return c.inyeccion.t0_iso ? new Date(c.inyeccion.t0_iso) : null; }
 function fechaHora(h) { const c = C(), f = new Date((c.fecha || new Date().toISOString().slice(0, 10)) + "T00:00:00"), [a, b, s] = h.split(":").map(Number); f.setHours(a, b, s || 0, 0); return f; }
-function evento(txt) { C().eventos.push({iso: new Date().toISOString(), hora: horaTxt(new Date()), texto: txt}); guardar(); }
+function evento(txt) { C().eventos.push({iso: new Date().toISOString(), hora: horaTxt(new Date()), texto: txt, quien: quienSoy()}); guardar(); }
 const mmss = s => { const a = Math.abs(Math.round(s)); return pad(Math.floor(a / 60)) + ":" + pad(a % 60); };
 const hhmmss = s => { const a = Math.abs(Math.round(s)); return pad(Math.floor(a / 3600)) + ":" + pad(Math.floor(a % 3600 / 60)) + ":" + pad(a % 60); };
 function transcurrido() { const T = t0(), E = ens(); if (!T) return null; const fin = E.estado === "terminado" && E.t_fin_iso ? new Date(E.t_fin_iso) : new Date(); return (fin.getTime() - T.getTime()) / 1000; }
@@ -410,41 +410,41 @@ function revisarAvisos() {                  // avisos con sonido y vibración: 2
   if (textos.length) { guardar(true); avisar(textos.join(" · ")); }
 }
 function pintarCampana() {
-  const c = C(), E = ens(), I = c.inyeccion, T = t0(), term = E.estado === "terminado", X = estaciones(), est = c.puntos.filter(p => p.rol === "monitoreo");
-  const control = !T ? `<button class="b" id="c-iny" style="width:100%;font-size:1.25rem;padding:1rem">💧 INYECTAR AHORA</button><p class="nota">Toque el botón en el instante en que vierte la sal: marca la hora y arranca el contador. Si ya inyectó, escriba la hora abajo.</p>`
+  const c = C(), E = ens(), I = c.inyeccion, T = t0(), term = E.estado === "terminado", X = estaciones(), est = c.puntos.filter(p => p.rol === "monitoreo"), RO = rolActual(), esEst = RO.tipo === "estacion", vEst = esEst ? est.filter(p => p.id === RO.punto_id) : RO.tipo === "inyeccion" ? [] : est;
+  const control = !T ? (esEst ? `<p class="nota"><b>Espere el aviso por radio de quien inyecta.</b> Cuando diga «inyecté a las HH:MM:SS», escriba esa hora exacta en el recuadro de abajo (la cuenta regresiva de su estación arranca de ahí), o toque el botón al oírlo.</p><button class="b" id="c-iny" style="width:100%;font-size:1.1rem;padding:.9rem">💧 YA INYECTARON (ahora)</button>` : `<button class="b" id="c-iny" style="width:100%;font-size:1.25rem;padding:1rem">💧 INYECTAR AHORA</button><p class="nota">Toque el botón en el instante en que vierte la sal: marca la hora y arranca el contador. Si ya inyectó, escriba la hora abajo.</p>`)
     : term ? `<div class="nota">Terminó a las <b>${E.t_fin_iso ? horaTxt(new Date(E.t_fin_iso)) : "—"}</b> · duración total <b>${E.t_fin_iso ? hhmmss(transcurrido()) : "—"}</b></div><button class="b g" id="c-reabrir" style="width:100%;margin-top:.4rem">Reabrir el ensayo</button>`
     : `<button class="b r" id="c-parar" style="width:100%;font-size:1.1rem;padding:.9rem">■ PARAR EL ENSAYO</button><button class="b g p" id="c-anular" style="margin-top:.5rem">Anular la inyección (me equivoqué)</button>`;
-  const estHtml = est.map(p => { const R = c.registros[p.id] || (c.registros[p.id] = {}), s = estadoEstacion(p), x = X.find(e => e.id === p.id)?.x_m;
+  const estHtml = RO.tipo === "inyeccion" ? est.map(p => { const s = estadoEstacion(p); return `<div class="card est ${s.cl}" id="card-${p.id}"><b>${esc(p.nombre)}</b><div class="nota" id="st-${p.id}">${s.h}</div></div>`; }).join("") : vEst.map(p => { const R = c.registros[p.id] || (c.registros[p.id] = {}), s = estadoEstacion(p), x = X.find(e => e.id === p.id)?.x_m;
     return `<div class="card est ${s.cl}" id="card-${p.id}"><div class="pt"><b>${esc(p.nombre)}</b><span class="badge">${x == null ? "sin distancia" : nf(x, 0) + " m desde la inyección"}</span></div><div class="nota" id="st-${p.id}">${s.h}</div>
       <div class="fila" style="margin-top:.4rem">${campo("Sonda / serie", `registros.${p.id}.sonda`, "t", R.sonda)}${campo("EC de fondo (µS/cm)", `registros.${p.id}.ec_fondo`, "n", R.ec_fondo)}</div>
       <div class="fila" style="margin-top:.4rem">${campo("Sonda encendida (hora)", `registros.${p.id}.inicio`, "h", R.inicio)}${campo("Pico visto (hora)", `registros.${p.id}.pico`, "h", R.pico)}${campo("Sonda apagada (hora)", `registros.${p.id}.fin`, "h", R.fin)}</div>
       <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.4rem"><button class="b g p" data-ahora="${p.id}|inicio">Encendí la sonda</button><button class="b g p" data-ahora="${p.id}|pico">Vi el pico</button><button class="b g p" data-ahora="${p.id}|fin">Apagué la sonda</button></div>
       ${fotosHtml("estacion", p.id, ETQ_EST)}${campo("Notas", `registros.${p.id}.notas`, "t", R.notas)}</div>`; }).join("");
-  $("t-camp").innerHTML = `<div class="card" style="text-align:center"><div class="nota">${term ? "ENSAYO TERMINADO" : T ? "Tiempo desde la inyección" : "Aún no se ha inyectado"}</div><div class="crono" id="c-crono">—</div>${control}</div>
-    <details class="card" ${T ? "" : "open"}><summary><b>1 · Antes de inyectar</b></summary><div style="margin-top:.4rem">${CHECK.map((t, i) => `<label style="flex-direction:row;align-items:center;gap:.5rem;font-size:.95rem;color:#1d2433;margin:.3rem 0"><input type="checkbox" data-chk="${i}" style="width:auto" ${E.check?.[i] ? "checked" : ""}> ${t}</label>`).join("")}</div>
+  $("t-camp").innerHTML = `${rolCard(c, RO, est)}<div class="card" style="text-align:center"><div class="nota">${term ? "ENSAYO TERMINADO" : T ? "Tiempo desde la inyección" : "Aún no se ha inyectado"}</div><div class="crono" id="c-crono">—</div>${control}</div>
+    ${esEst ? `<div class="card">${campo("Hora de inyección (la que anuncia quien inyecta)", "inyeccion.hora", "h", I.hora, 'id="c-hora"')}</div>` : `<details class="card" ${T ? "" : "open"}><summary><b>1 · Antes de inyectar</b></summary><div style="margin-top:.4rem">${CHECK.map((t, i) => `<label style="flex-direction:row;align-items:center;gap:.5rem;font-size:.95rem;color:#1d2433;margin:.3rem 0"><input type="checkbox" data-chk="${i}" style="width:auto" ${E.check?.[i] ? "checked" : ""}> ${t}</label>`).join("")}</div>
       <div class="fila" style="margin-top:.4rem">${campo("Masa de sal pesada (kg)", "inyeccion.masa_kg", "n", I.masa_kg)}${campo("Pureza (fracción)", "inyeccion.pureza", "n", I.pureza)}${campo("Agua usada (L)", "inyeccion.agua_l", "n", I.agua_l)}${campo("Sal (tipo, marca, lote)", "inyeccion.sal", "t", I.sal)}${campo("Hora de inyección", "inyeccion.hora", "h", I.hora, 'id="c-hora"')}</div>
-      ${T && !I.masa_kg ? '<div class="adv">⚠ Falta anotar la masa de sal pesada: sin ella no se puede evaluar el ensayo.</div>' : ""}<div style="margin-top:.5rem"><b>Fotos de la sal, la mezcla y la inyección</b>${fotosHtml("inyeccion", c.puntos.find(p => p.rol === "inyeccion")?.id, ETQ_INY)}</div></details>
-    <h2>2 · Estaciones</h2>${estHtml || '<p class="nota">No hay estaciones de monitoreo: márquelas en «Puntos».</p>'}
+      ${T && !I.masa_kg ? '<div class="adv">⚠ Falta anotar la masa de sal pesada: sin ella no se puede evaluar el ensayo.</div>' : ""}<div style="margin-top:.5rem"><b>Fotos de la sal, la mezcla y la inyección</b>${fotosHtml("inyeccion", c.puntos.find(p => p.rol === "inyeccion")?.id, ETQ_INY)}</div></details>`}
+    <h2>${esEst ? "Su estación" : "2 · Estaciones"}</h2>${estHtml || '<p class="nota">No hay estaciones de monitoreo: márquelas en «Puntos».</p>'}
     <h2>3 · Cierre</h2>
     <div class="card"><b>Aforos de campo</b>${c.aforos.map((a, i) => `<div class="fila" style="margin-top:.4rem">${campo("Punto", `aforos.${i}.punto`, "t", a.punto)}${campo("Q (L/s)", `aforos.${i}.q_ls`, "n", a.q_ls)}${campo("Hora", `aforos.${i}.hora`, "h", a.hora)}${campo("Método", `aforos.${i}.metodo`, "t", a.metodo)}<button class="b g p" data-qa="${i}" style="align-self:flex-end">Quitar</button></div>`).join("")}<div><button class="b g p" id="c-afo" style="margin-top:.4rem">+ Agregar aforo</button></div></div>
     <div class="card"><b>Notas rápidas con la hora</b><div class="fila" style="margin-top:.4rem"><label style="flex:3">Nota<input id="c-ev-txt" type="text" placeholder="p. ej. subió el caudal, lluvia, sonda movida"></label><button class="b" id="c-ev" style="align-self:flex-end">Anotar</button></div><div class="scroll"><table id="c-evt"></table></div></div>
     <label>Observaciones generales<textarea data-r="observaciones">${esc(c.observaciones)}</textarea></label>
     <details class="card"><summary><b>Datos de la jornada</b></summary><div class="fila" style="margin-top:.4rem">${campo("Nombre de la campaña", "nombre", "t", c.nombre, 'data-re="1"')}${campo("Fecha", "fecha", "f", c.fecha)}${campo("Responsable", "responsable", "t", c.responsable)}${campo("Cuadrilla", "cuadrilla", "t", c.cuadrilla)}${campo("Clima / condición del cauce", "clima", "t", c.clima)}</div></details>`;
-  if ($("c-iny")) $("c-iny").onclick = () => { prepararSonido(); const f = new Date(); I.hora = horaTxt(f); I.t0_iso = f.toISOString(); c.fecha = f.toISOString().slice(0, 10); E.estado = "en_curso"; E.t_fin_iso = null; E.avisos = {}; evento("Inyección del trazador" + (I.masa_kg ? " (" + I.masa_kg + " kg)" : "")); pedirPantalla(); pintarCampana(); };
+  if ($("c-iny")) $("c-iny").onclick = () => { prepararSonido(); const f = new Date(); I.hora = horaTxt(f); I.t0_iso = f.toISOString(); c.fecha = f.toISOString().slice(0, 10); E.estado = "en_curso"; E.t_fin_iso = null; E.avisos = {}; I.origen = esEst ? "recibida" : "propia"; evento(esEst ? "Se recibió el aviso de inyección" : "Inyección del trazador" + (I.masa_kg ? " (" + I.masa_kg + " kg)" : "")); pedirPantalla(); pintarCampana(); };
   if ($("c-parar")) $("c-parar").onclick = () => { if (!confirm("¿Terminar el ensayo? Se detienen el contador y los avisos.")) return; E.estado = "terminado"; E.t_fin_iso = new Date().toISOString(); evento("Ensayo terminado (duración " + hhmmss(transcurrido()) + ")"); $("aviso-ensayo").style.display = "none"; if (watchId === null) soltarPantalla(); pintarCampana(); };
   if ($("c-anular")) $("c-anular").onclick = () => { if (!confirm("¿Anular la inyección? Se borra la hora y el contador vuelve a cero (las notas se conservan).")) return; I.hora = ""; I.t0_iso = null; E.estado = "preparando"; E.t_fin_iso = null; E.avisos = {}; evento("Inyección anulada"); $("aviso-ensayo").style.display = "none"; pintarCampana(); };
   if ($("c-reabrir")) $("c-reabrir").onclick = () => { E.estado = "en_curso"; E.t_fin_iso = null; E.avisos = {}; evento("Ensayo reabierto"); pedirPantalla(); pintarCampana(); };
-  $("c-hora").addEventListener("change", () => { const h = $("c-hora").value; I.hora = h; I.t0_iso = h ? fechaHora(h).toISOString() : null; E.estado = h ? (E.estado === "terminado" ? "terminado" : "en_curso") : "preparando"; if (h) E.avisos = {}; guardar(); pintarCampana(); });
+  if ($("c-hora")) $("c-hora").addEventListener("change", () => { const h = $("c-hora").value; I.hora = h; I.origen = esEst ? "recibida" : "propia"; I.t0_iso = h ? fechaHora(h).toISOString() : null; E.estado = h ? (E.estado === "terminado" ? "terminado" : "en_curso") : "preparando"; if (h) E.avisos = {}; guardar(); pintarCampana(); });
   document.querySelectorAll("[data-chk]").forEach(i => i.onchange = () => { (E.check = E.check || {})[i.dataset.chk] = i.checked; guardar(); });
   document.querySelectorAll("[data-ahora]").forEach(b => b.onclick = () => { const [id, k] = b.dataset.ahora.split("|"); (c.registros[id] = c.registros[id] || {})[k] = horaTxt(new Date()); evento({inicio: "Sonda encendida en ", pico: "Pico visto en ", fin: "Sonda apagada en "}[k] + punto(id).nombre); pintarCampana(); });
   $("c-afo").onclick = () => { c.aforos.push({punto: "", q_ls: null, hora: horaTxt(new Date()).slice(0, 5), metodo: ""}); guardar(); pintarCampana(); };
   document.querySelectorAll("[data-qa]").forEach(b => b.onclick = () => { c.aforos.splice(+b.dataset.qa, 1); guardar(); pintarCampana(); });
   $("c-ev").onclick = () => { const t = $("c-ev-txt").value.trim(); if (!t) return; evento(t); pintarCampana(); };
-  $("c-evt").innerHTML = c.eventos.length ? "<tbody>" + c.eventos.slice().reverse().map(e => `<tr><td style="white-space:nowrap"><b>${e.hora}</b></td><td>${esc(e.texto)}</td></tr>`).join("") + "</tbody>" : "";
+  $("c-evt").innerHTML = c.eventos.length ? "<tbody>" + c.eventos.slice().reverse().map(e => `<tr><td style="white-space:nowrap"><b>${e.hora}</b></td><td>${esc(e.texto)}${e.quien ? ' <span class="nota">— ' + esc(e.quien) + '</span>' : ''}</td></tr>`).join("") + "</tbody>" : "";
   actualizarEnsayo();
 }
 function actualizarEnsayo() {                 // se llama cada segundo: solo refresca los textos que cambian, sin tocar lo que se está escribiendo
-  const s = transcurrido(), cr = $("c-crono"); if (cr) cr.textContent = s === null ? "—" : (s < 0 ? "−" : "") + hhmmss(s);
+  const s = transcurrido(), cr = $("c-crono"), rj = $("c-reloj"); if (rj) rj.textContent = horaTxt(new Date()); if (cr) cr.textContent = s === null ? "—" : (s < 0 ? "−" : "") + hhmmss(s);
   C().puntos.filter(p => p.rol === "monitoreo").forEach(p => { const e = $("st-" + p.id), k = $("card-" + p.id); if (!e) return; const r = estadoEstacion(p); if (e.innerHTML !== r.h) e.innerHTML = r.h; if (k) k.className = "card est " + r.cl; });
 }
 setInterval(() => { revisarAvisos(); if (TAB === "camp") actualizarEnsayo(); }, 1000);
@@ -546,6 +546,63 @@ async function construirZip() {
   marcarRespaldo(); return crearZip(files);
 }
 
+// ------------------------------------------------------------------ VARIAS PERSONAS: rol de cada celular y combinación de las bitácoras
+function rolActual() {
+  const c = C(); if (!c.rol) c.rol = {tipo: "coordinador", punto_id: null, nombre: "", elegido: false};
+  if (c.rol.tipo === "estacion" && !c.puntos.some(p => p.id === c.rol.punto_id)) { c.rol.tipo = "coordinador"; c.rol.punto_id = null; }
+  return c.rol;
+}
+function rolEtiquetaDe(r, c) { if (!r) return "Sin rol"; return r.tipo === "inyeccion" ? "Inyección" : r.tipo === "estacion" ? "Estación " + (c.puntos.find(p => p.id === r.punto_id)?.nombre || "") : "Coordinador"; }
+function quienSoy() { const c = C(), R = c.rol; return R ? rolEtiquetaDe(R, c) + (R.nombre ? " (" + R.nombre + ")" : "") : ""; }
+function rolCard(c, RO, est) {
+  const val = RO.tipo === "estacion" ? "est:" + RO.punto_id : RO.tipo;
+  return `<details class="card" ${RO.elegido && RO.nombre ? "" : "open"}><summary><b>Mi rol: ${esc(rolEtiquetaDe(RO, c))}</b>${RO.nombre ? " · " + esc(RO.nombre) : ""} <span class="nota">· hora de este celular <b id="c-reloj">--:--:--</b></span></summary>
+    <div class="fila" style="margin-top:.4rem"><label>Mi rol en el ensayo<select id="c-rol"><option value="coordinador"${val === "coordinador" ? " selected" : ""}>Coordinador (veo todo)</option><option value="inyeccion"${val === "inyeccion" ? " selected" : ""}>Inyección</option>${est.map(p => `<option value="est:${p.id}"${val === "est:" + p.id ? " selected" : ""}>Estación: ${esc(p.nombre)}</option>`).join("")}</select></label>${campo("Mi nombre", "rol.nombre", "t", RO.nombre)}</div>
+    <p class="nota">Cada persona elige su rol en su propio celular y verá solo lo suyo. Antes de empezar, compare la <b>hora de este celular</b> con la de los demás: con la hora automática activada deben coincidir al segundo. Quien inyecta dice por radio la hora exacta y los de las estaciones la escriben (o tocan «Ya inyectaron» al oírla). Al terminar, cada uno envía su archivo al coordinador, que los combina en «Guardar».</p></details>`;
+}
+document.addEventListener("change", ev => {
+  if (ev.target.id !== "c-rol") return; const v = ev.target.value, RO = rolActual();
+  if (v.startsWith("est:")) { RO.tipo = "estacion"; RO.punto_id = v.slice(4); } else { RO.tipo = v; RO.punto_id = null; }
+  RO.elegido = true; guardar(); pintarCampana();
+});
+function decidir(texto, opciones) {
+  return new Promise(res => {
+    const v = document.createElement("div"); v.style.cssText = "position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:1rem";
+    v.innerHTML = `<div style="background:#fff;border-radius:.7rem;padding:1rem;max-width:26rem;width:100%"><p style="margin:0 0 .8rem">${esc(texto)}</p>${opciones.map(([k, t], i) => `<button class="b ${i ? "g" : ""}" data-op="${k}" style="width:100%;margin:.2rem 0">${esc(t)}</button>`).join("")}</div>`;
+    document.body.appendChild(v); v.querySelectorAll("[data-op]").forEach(b => b.onclick = () => { v.remove(); res(b.dataset.op); });
+  });
+}
+function combinarCampanas(a, b, d) {          // suma a la campaña a lo que trae b (de otro celular): lo propio de cada estación manda; lo que falta se completa
+  const rolB = d.rol || null, r = {pt: 0, ev: 0, fo: 0, af: 0, reg: []}, vacio = v => v === null || v === undefined || v === "";
+  let ult = -1;
+  b.puntos.forEach(pb => {
+    const i = a.puntos.findIndex(x => x.id === pb.id);
+    if (i >= 0) { const pa = a.puntos[i]; ["cota", "cota_origen", "alt_gps", "alt_acc", "acc"].forEach(k => { if (vacio(pa[k]) && !vacio(pb[k])) pa[k] = pb[k]; }); const h = {...(pb.hid || {})}; Object.entries(pa.hid || {}).forEach(([k, v]) => { if (!vacio(v)) h[k] = v; }); pa.hid = h; ult = i; }
+    else { a.puntos.splice(ult + 1, 0, pb); ult++; r.pt++; }
+  });
+  b.tramos.forEach(t => { if (!a.tramos.some(x => x.id === t.id)) a.tramos.push(t); });
+  Object.entries(b.registros || {}).forEach(([id, rb]) => {
+    const duenoB = rolB && rolB.tipo === "estacion" && rolB.punto_id === id, ra = a.registros[id] || (a.registros[id] = {}); let n = 0;
+    Object.entries(rb).forEach(([k, v]) => { if (vacio(v)) return; if (duenoB || vacio(ra[k])) { if (ra[k] !== v) n++; ra[k] = v; } });
+    if (n) r.reg.push(a.puntos.find(p => p.id === id)?.nombre || id);
+  });
+  const ia = a.inyeccion, ib = b.inyeccion, peso = i => i.t0_iso ? (i.origen === "recibida" ? 1 : 2) : 0, prefB = peso(ib) > peso(ia) || (rolB && rolB.tipo === "inyeccion" && peso(ib) >= peso(ia));
+  if (prefB) { ia.hora = ib.hora; ia.t0_iso = ib.t0_iso; ia.origen = ib.origen; }
+  ["masa_kg", "pureza", "agua_l", "sal"].forEach(k => { if (!vacio(ib[k]) && (prefB || vacio(ia[k]))) ia[k] = ib[k]; });
+  const llave = e => e.iso + "|" + e.texto; const have = new Set(a.eventos.map(llave));
+  b.eventos.forEach(e => { if (!have.has(llave(e))) { a.eventos.push(e); r.ev++; } }); a.eventos.sort((x, y) => x.iso < y.iso ? -1 : 1);
+  const hayA = new Set((a.fotos || []).map(f => f.id)); a.fotos = a.fotos || [];
+  (b.fotos || []).forEach(f => { if (!hayA.has(f.id)) { a.fotos.push(f); r.fo++; } });
+  const kaf = x => JSON.stringify([x.punto, x.q_ls, x.hora, x.metodo]), haf = new Set(a.aforos.map(kaf));
+  b.aforos.forEach(x => { if (!haf.has(kaf(x))) { a.aforos.push(x); r.af++; } });
+  const ea = ens(); if (b.ensayo && ea.estado !== "terminado" && b.ensayo.estado === "terminado") { ea.estado = "terminado"; ea.t_fin_iso = b.ensayo.t_fin_iso; }
+  ["responsable", "cuadrilla", "clima"].forEach(k => { if (vacio(a[k]) && !vacio(b[k])) a[k] = b[k]; });
+  if (!vacio(b.observaciones) && !(a.observaciones || "").includes(b.observaciones)) a.observaciones = (a.observaciones ? a.observaciones + "\n" : "") + "— " + rolEtiquetaDe(rolB, b) + (rolB?.nombre ? " (" + rolB.nombre + ")" : "") + ": " + b.observaciones;
+  if (!a.programacion && b.programacion) a.programacion = b.programacion;
+  if (!(a.aportes || []).some(x => x.exportado && x.exportado === d.exportado && JSON.stringify(x.rol) === JSON.stringify(rolB))) a.aportes = [...(a.aportes || []), {rol: rolB, exportado: d.exportado || null, eventos: r.ev, fotos: r.fo}];
+  return `+${r.ev} eventos, +${r.fo} fotos, +${r.af} aforos${r.pt ? ", +" + r.pt + " puntos" : ""}; registros de: ${r.reg.length ? r.reg.join(", ") : "ninguna estación"}.`;
+}
+
 // ------------------------------------------------------------------ GUARDAR (exportar / importar)
 const slug = t => (t || "campana").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9]+/g, "_").slice(0, 40);
 const base = () => "campo_trazadores_" + slug(C().nombre) + "_" + C().fecha;
@@ -553,9 +610,9 @@ function descargar(blob, nombre) { const a = document.createElement("a"); a.href
 function datosExport() {
   const c = C(), A = abscisas(), L = enlaces(), ii = c.puntos.findIndex(p => p.rol === "inyeccion");
   return {formato: "ccp-bitacora-trazadores", version: 2, proyecto_id: null, campana_id: c.id, exportado: new Date().toISOString(), campana: {nombre: c.nombre, fecha: c.fecha, responsable: c.responsable, cuadrilla: c.cuadrilla, clima: c.clima},
-    inyeccion: {masa_kg: c.inyeccion.masa_kg, pureza: c.inyeccion.pureza, agua_l: c.inyeccion.agua_l, hora: c.inyeccion.hora, t0_iso: c.inyeccion.t0_iso, sal: c.inyeccion.sal, punto: c.puntos[ii]?.nombre || ""},
+    inyeccion: {masa_kg: c.inyeccion.masa_kg, pureza: c.inyeccion.pureza, agua_l: c.inyeccion.agua_l, hora: c.inyeccion.hora, t0_iso: c.inyeccion.t0_iso, sal: c.inyeccion.sal, origen: c.inyeccion.origen || null, punto: c.puntos[ii]?.nombre || ""},
     puntos: c.puntos.map((p, i) => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, precision_m: p.acc, cota: p.cota ?? null, cota_origen: p.cota_origen ?? null, alt_gps: p.alt_gps ?? null, alt_acc: p.alt_acc ?? null, notas: p.notas, abscisa_m: A[i], dist_anterior_m: i ? L[i - 1].d : null, origen_distancia: i ? L[i - 1].origen : null, dist_desde_inyeccion_m: ii >= 0 && A[i] !== null && A[ii] !== null ? A[i] - A[ii] : null, hidraulica: p.hid})),
-    fotos: c.fotos || [], ensayo: {estado: ens().estado, t_fin_iso: ens().t_fin_iso, check: ens().check || {}}, tramos: c.tramos, parametros: c.params, programacion: c.programacion, registro_estaciones: Object.fromEntries(Object.entries(c.registros).map(([id, r]) => [punto(id)?.nombre || id, r])), aforos: c.aforos, eventos: c.eventos, observaciones: c.observaciones};
+    fotos: c.fotos || [], rol: c.rol || null, aportes: c.aportes || [], ensayo: {estado: ens().estado, t_fin_iso: ens().t_fin_iso, check: ens().check || {}}, tramos: c.tramos, parametros: c.params, programacion: c.programacion, registro_estaciones: Object.fromEntries(Object.entries(c.registros).map(([id, r]) => [punto(id)?.nombre || id, r])), aforos: c.aforos, eventos: c.eventos, observaciones: c.observaciones};
 }
 function blobJson() { const b = new Blob([JSON.stringify(datosExport(), null, 1)], {type: "application/json"}); C().exp = Date.now() + 1; guardar(true); pintarResp(); const u = $("ult-resp"); if (u) u.textContent = new Date(C().exp).toLocaleString("es-CO"); return b; }
 function csv() {
@@ -582,12 +639,12 @@ let PROMPT_INSTALAR = null;
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); PROMPT_INSTALAR = e; if (TAB === "exp") pintarGuardar(); });
 function pintarGuardar() {
   const c = C(), ios = /iphone|ipad/i.test(navigator.userAgent), instalada = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
-  $("t-exp").innerHTML = `<h2>Sacar los datos del teléfono</h2><div class="card" style="border-color:var(--am)"><b>¿Dónde queda lo que escribo?</b><p class="nota">Se guarda solo, automáticamente, <b>dentro de este navegador del teléfono</b>. Si borra la app, la desinstala o limpia los datos del navegador, <b>se pierde</b>. La copia segura es el archivo <b>.json</b>: descárguelo o compártalo (WhatsApp, correo, Drive) al terminar cada tramo del trabajo y siempre antes de borrar o reinstalar la app. Almacenamiento protegido por el navegador: <b>${DB.persistente ? "sí" : "no confirmado"}</b>.</p></div>
+  $("t-exp").innerHTML = `<h2>Sacar los datos del teléfono</h2><div class="card" style="border-color:var(--am)"><b>¿Dónde queda lo que escribo?</b><p class="nota">Se guarda solo, automáticamente, <b>dentro de este navegador del teléfono</b>. Si borra la app, la desinstala o limpia los datos del navegador, <b>se pierde</b>. La copia segura es el archivo <b>.json</b>: descárguelo o compártalo (WhatsApp, correo, Drive) al terminar cada tramo del trabajo y siempre antes de borrar o reinstalar la app. Almacenamiento protegido por el navegador: <b>${DB.persistente ? "sí" : "no confirmado"}</b>.</p><p class="nota"><b>Varias personas:</b> para repartir la campaña, el coordinador toca «Compartir» y los demás cargan ese archivo; cada uno elige su rol en «Ensayo». Al terminar, cada uno envía su archivo al coordinador, que los carga aquí y elige <b>«Combinar»</b> (puede elegir varios archivos a la vez).</p></div>
     <p class="nota">Campaña: <b>${esc(c.nombre)}</b> · ${c.puntos.length} puntos · ${c.tramos.length} tramos grabados · último respaldo: <b id="ult-resp">${c.exp ? new Date(c.exp).toLocaleString("es-CO") : "ninguno"}</b>.</p>
     <div class="card"><button class="b" id="x-comp" style="width:100%;margin:.2rem 0">Compartir / enviar (WhatsApp, correo, Drive…)</button>
     <button class="b g" id="x-zip" style="width:100%;margin:.2rem 0">Descargar todo con fotos (.zip)</button><button class="b g" id="x-json" style="width:100%;margin:.2rem 0">Descargar solo los datos (.json)</button><button class="b g" id="x-kml" style="width:100%;margin:.2rem 0">Puntos y recorrido (.kml) — para Google Earth y el paso 1</button>
     <button class="b g" id="x-gpx" style="width:100%;margin:.2rem 0">Puntos y recorrido (.gpx)</button><button class="b g" id="x-csv" style="width:100%;margin:.2rem 0">Resumen (.csv) — para Excel</button><p class="nota" id="x-msg"></p></div>
-    <h2>Cargar una campaña guardada</h2><div class="card"><input type="file" id="x-file" accept="*/*"><p class="nota" id="x-file-msg" style="font-weight:600"></p><p class="nota">Para continuar una campaña o recuperarla (el archivo .json de «Descargar todo» o «Compartir»). Si el selector solo muestra el teléfono, toque el menú ☰ (arriba a la izquierda) y elija <b>Drive</b>; si Drive no aparece, abra el archivo en la app de Drive, toque ⋮ → <b>Descargar</b> y búsquelo en «Descargas».</p></div>
+    <h2>Cargar una campaña guardada</h2><div class="card"><input type="file" id="x-file" accept="*/*" multiple><p class="nota" id="x-file-msg" style="font-weight:600"></p><p class="nota">Para continuar una campaña o recuperarla (el archivo .json de «Descargar todo» o «Compartir»). Si el selector solo muestra el teléfono, toque el menú ☰ (arriba a la izquierda) y elija <b>Drive</b>; si Drive no aparece, abra el archivo en la app de Drive, toque ⋮ → <b>Descargar</b> y búsquelo en «Descargas».</p></div>
     <details class="card"><summary><b>Si no logra elegir el archivo: pegar su contenido</b></summary><p class="nota">Abra el .json en el teléfono (Drive lo muestra como texto), toque «seleccionar todo», copie y pegue aquí.</p><textarea id="x-pegar" placeholder="Pegue aquí todo el texto del archivo .json" style="min-height:6rem"></textarea><button class="b g" id="x-pegar-ok" style="margin-top:.4rem">Cargar el texto pegado</button></details>
     <h2>Campañas en este teléfono</h2><div class="card">${DB.campanas.map(k => `<div class="pt" style="padding:.25rem 0"><span>${esc(k.nombre)} <span class="nota">(${k.puntos.length} puntos)</span></span>${DB.campanas.length > 1 ? `<button class="b g p" data-del="${k.id}" style="color:var(--ro)">Borrar</button>` : ""}</div>`).join("")}</div>
     <h2>Instalar en el celular</h2><div class="card">${instalada ? "<p>✔ Ya está instalada.</p>" : PROMPT_INSTALAR ? '<button class="b" id="x-inst" style="width:100%">Anclar a la pantalla de inicio</button>' : ios ? '<p class="nota">En iPhone: abra esta página en Safari, toque el botón Compartir y elija «Agregar a pantalla de inicio».</p>' : '<p class="nota">En Android: menú ⋮ del navegador → «Instalar aplicación» o «Agregar a pantalla de inicio». Si no aparece, la página debe abrirse con https://.</p>'}
@@ -597,22 +654,31 @@ function pintarGuardar() {
   $("x-csv").onclick = () => descargar(csv(), base() + ".csv"); $("x-gpx").onclick = () => descargar(gpx(), base() + ".gpx"); $("x-kml").onclick = () => descargar(kml(), base() + ".kml");
   $("x-comp").onclick = async () => { const conFotos = (c.fotos || []).length > 0, f = conFotos ? new File([await construirZip()], base() + ".zip", {type: "application/zip"}) : new File([blobJson()], base() + ".json", {type: "application/json"}); if (navigator.canShare && navigator.canShare({files: [f]})) { try { await navigator.share({files: [f], title: c.nombre}); $("x-msg").textContent = "Enviado."; } catch (e) { if (e.name !== "AbortError") $("x-msg").textContent = "No se pudo compartir: " + e.message; } } else { descargar(f, f.name); $("x-msg").textContent = "Este navegador no comparte archivos: se descargó."; } };
   const msgArchivo = (t, err) => { const m = $("x-file-msg"); if (m) { m.style.color = err ? "var(--ro)" : "var(--ok)"; m.textContent = t; } if (err) alert(t); };
+  const colocar = (k, blobs) => { DB.campanas = DB.campanas.filter(x => x.id !== k.id); DB.campanas.push(k); k.exp = k.mod = Date.now() + 1; DB.activa = k.id; guardar(true); pintarCabecera(); pintarGuardar(); if (blobs) blobs.forEach((bl, id) => FDB.poner({id, camp: k.id, blob: bl}));
+    msgArchivo("✔ Campaña cargada: " + k.nombre + " (" + k.puntos.length + " puntos" + (k.fotos.length ? ", " + k.fotos.length + " fotos" + (blobs ? "" : " — sin las imágenes: use el .zip para recuperarlas") : "") + "). Ahora elija su rol en la pestaña «Ensayo»."); };
   const importar = (texto, blobs) => { try { const d = JSON.parse(texto); if (d.formato !== "ccp-bitacora-trazadores" || d.version !== 2) throw new Error("No es un archivo de esta app."); const k = nueva(d.campana?.nombre); Object.assign(k, {id: d.campana_id || k.id, fotos: d.fotos || [], nombre: d.campana?.nombre || k.nombre, fecha: d.campana?.fecha || k.fecha, responsable: d.campana?.responsable || "", cuadrilla: d.campana?.cuadrilla || "", clima: d.campana?.clima || "", observaciones: d.observaciones || "",
       puntos: (d.puntos || []).map(p => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, acc: p.precision_m, cota: p.cota ?? null, cota_origen: p.cota_origen ?? null, alt_gps: p.alt_gps ?? null, alt_acc: p.alt_acc ?? null, notas: p.notas || "", hid: p.hidraulica || {}})), tramos: d.tramos || [], params: {...PARAM0, ...(d.parametros || {})}, aforos: d.aforos || [], eventos: d.eventos || [], programacion: d.programacion || null,
-      inyeccion: {...k.inyeccion, masa_kg: d.inyeccion?.masa_kg ?? null, pureza: d.inyeccion?.pureza ?? 0.95, agua_l: d.inyeccion?.agua_l ?? null, hora: d.inyeccion?.hora || "", t0_iso: d.inyeccion?.t0_iso || null, sal: d.inyeccion?.sal || ""}});
+      inyeccion: {...k.inyeccion, masa_kg: d.inyeccion?.masa_kg ?? null, pureza: d.inyeccion?.pureza ?? 0.95, agua_l: d.inyeccion?.agua_l ?? null, hora: d.inyeccion?.hora || "", t0_iso: d.inyeccion?.t0_iso || null, sal: d.inyeccion?.sal || "", origen: d.inyeccion?.origen || null}});
       k.ensayo = d.ensayo ? {estado: d.ensayo.estado || "preparando", t_fin_iso: d.ensayo.t_fin_iso || null, check: d.ensayo.check || {}, avisos: {}} : undefined; k.registros = {}; Object.entries(d.registro_estaciones || {}).forEach(([nom, r]) => { const p = k.puntos.find(x => x.nombre === nom); if (p) k.registros[p.id] = r; });
-      DB.campanas = DB.campanas.filter(x => x.id !== k.id); DB.campanas.push(k); k.exp = k.mod = Date.now() + 1; DB.activa = k.id; guardar(true); pintarCabecera(); pintarGuardar(); if (blobs) blobs.forEach((bl, id) => FDB.poner({id, camp: k.id, blob: bl})); msgArchivo("✔ Campaña cargada: " + k.nombre + " (" + k.puntos.length + " puntos" + (k.fotos.length ? ", " + k.fotos.length + " fotos" + (blobs ? "" : " — sin las imágenes: use el .zip para recuperarlas") : "") + ")."); } catch (e) { msgArchivo(e instanceof SyntaxError ? "El archivo no es un .json válido (¿está incompleto o es otro tipo de archivo?)." : "No se pudo cargar: " + e.message, true); } };
+      k.aportes = d.aportes || []; const prev = DB.campanas.find(x => x.id === k.id);
+      if (prev) return decidir("Ya tiene la campaña «" + prev.nombre + "» en este teléfono. ¿Qué hace con el archivo?", [["combinar", "Combinar: sumar lo nuevo"], ["reemplazar", "Reemplazar la campaña"], ["cancelar", "Cancelar"]]).then(op => {
+        if (op === "cancelar") return msgArchivo("Carga cancelada.");
+        if (op === "reemplazar") return colocar(k, blobs);
+        const resumen = combinarCampanas(prev, k, d); if (blobs) blobs.forEach((bl, id) => FDB.poner({id, camp: prev.id, blob: bl})); DB.activa = prev.id; guardar(); pintarCabecera(); pintarGuardar(); msgArchivo("✔ Combinada con «" + prev.nombre + "»: " + resumen); });
+      colocar(k, blobs);
+    } catch (e) { msgArchivo(e instanceof SyntaxError ? "El archivo no es un .json válido (¿está incompleto o es otro tipo de archivo?)." : "No se pudo cargar: " + e.message, true); } };
   const leer = f => new Promise((res, rej) => { try { f.text().then(res, () => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error("leer")); r.readAsText(f); }); } catch (e) { rej(e); } });
   const importarArchivo = async f => {
     const buf = await (f.arrayBuffer ? f.arrayBuffer().catch(() => null) : null) || await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error("leer")); r.readAsArrayBuffer(f); }), b2 = new Uint8Array(buf, 0, 2);
     if (b2[0] === 0x50 && b2[1] === 0x4b) {                                             // .zip: datos + fotos
       const m = await leerZip(buf), j = m.get("campana.json"); if (!j) throw new Error("el .zip no trae campana.json"); const blobs = new Map();
       m.forEach((data, name) => { if (name.startsWith("fotos/")) blobs.set(name.slice(6).replace(/\.jpg$/, ""), new Blob([data], {type: "image/jpeg"})); });
-      importar(new TextDecoder().decode(j), blobs);
-    } else importar(new TextDecoder().decode(buf));
+      await importar(new TextDecoder().decode(j), blobs);
+    } else await importar(new TextDecoder().decode(buf));
   };
-  $("x-file").onchange = async ev => { const f = ev.target.files[0]; if (!f) return; msgArchivo("Leyendo «" + f.name + "» (" + Math.max(1, Math.round(f.size / 1024)) + " KB)…");
-    try { await importarArchivo(f); } catch (e) { msgArchivo("No se pudo leer «" + f.name + "». Si está en Drive: ábralo en la app de Drive, toque ⋮ → Descargar, y elíjalo desde «Descargas»; o use «pegar su contenido» aquí abajo.", true); }
+  $("x-file").onchange = async ev => { const fs = [...ev.target.files]; if (!fs.length) return;
+    for (const f of fs) { msgArchivo("Leyendo «" + f.name + "» (" + Math.max(1, Math.round(f.size / 1024)) + " KB)…");
+      try { await importarArchivo(f); } catch (e) { msgArchivo("No se pudo leer «" + f.name + "». Si está en Drive: ábralo en la app de Drive, toque ⋮ → Descargar, y elíjalo desde «Descargas»; o use «pegar su contenido» aquí abajo.", true); } }
     ev.target.value = ""; };
   $("x-pegar-ok").onclick = () => { const t = $("x-pegar").value.trim(); if (!t) return msgArchivo("Pegue primero el texto del archivo.", true); importar(t); };
   document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => { const k = DB.campanas.find(x => x.id === b.dataset.del); if (confirm("¿Borrar «" + k.nombre + "» de este teléfono? Si no la descargó, se pierde (también sus fotos).")) { (k.fotos || []).forEach(f => FDB.borrar(f.id).catch(() => {})); DB.campanas = DB.campanas.filter(x => x !== k); if (DB.activa === k.id) DB.activa = DB.campanas[0].id; guardar(); pintarCabecera(); pintarGuardar(); } });
