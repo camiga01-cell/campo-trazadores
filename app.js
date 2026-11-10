@@ -102,7 +102,7 @@ function onFix(pos) {
   pintarGPS(); oyentes.slice().forEach(f => f(ULT));
   if (REC) {
     const A = DB.ajustes, u = REC.pts[REC.pts.length - 1];
-    if (ULT.acc <= A.acc_max && (!u || hav([u[0], u[1]], [ULT.lat, ULT.lon]) >= Math.max(A.paso_min, ULT.acc * 0.5))) { REC.pts.push([ULT.lat, ULT.lon, ULT.t, Math.round(ULT.acc)]); pintarRecorrido(); }
+    if (ULT.acc <= A.acc_max && (!u || hav([u[0], u[1]], [ULT.lat, ULT.lon]) >= Math.max(A.paso_min, ULT.acc * 0.5))) { REC.pts.push([ULT.lat, ULT.lon, ULT.t, Math.round(ULT.acc), ULT.alt ?? null]); pintarRecorrido(); }
     else pintarRecorrido();
   }
 }
@@ -217,6 +217,27 @@ function pendienteEntre(iA, iB) {            // iA aguas arriba, iB aguas abajo:
   if (!a || !b || a.cota == null || b.cota == null || A[iA] === null || A[iB] === null || !(A[iB] - A[iA] > 0)) return null;
   return {s: (a.cota - b.cota) / (A[iB] - A[iA]), dz: a.cota - b.cota, d: A[iB] - A[iA], gps: a.cota_origen === "gps" || b.cota_origen === "gps"};
 }
+function pendienteGPS(iA, iB) {      // preliminar: con la altitud del GPS. iA aguas arriba, iB aguas abajo
+  const c = C(), a = c.puntos[iA], b = c.puntos[iB]; if (!a || !b) return null;
+  const A = abscisas(), d = A[iB] !== null && A[iA] !== null ? A[iB] - A[iA] : null; if (!(d > 0)) return null;
+  const t = iB === iA + 1 ? tramoEntre(a.id, b.id) : null;
+  if (t) {                                  // regresión de la altitud contra la distancia recorrida, con todas las lecturas del tramo
+    let s = 0, X = [], Z = [];
+    t.pts.forEach((q, k) => { if (k) s += hav(t.pts[k - 1], q); if (q[4] != null && isFinite(q[4]) && q[3] > 0) { X.push(s); Z.push(q[4]); } });
+    const L = s, n = X.length; if (n >= 10 && L >= 30) {
+      const xs = t.de === a.id ? X : X.map(x => L - x), mx = xs.reduce((u, v) => u + v, 0) / n, mz = Z.reduce((u, v) => u + v, 0) / n;
+      const sxx = xs.reduce((u, x) => u + (x - mx) ** 2, 0), sxz = xs.reduce((u, x, k) => u + (x - mx) * (Z[k] - mz), 0), m = sxz / sxx;
+      const sse = xs.reduce((u, x, k) => u + (Z[k] - mz - m * (x - mx)) ** 2, 0), se = Math.sqrt(sse / Math.max(n - 2, 1) / sxx);
+      return {s: -m, se: Math.max(se, 0.3 / L), d, dz: -m * L, fuente: `regresión de la altitud del GPS en ${n} lecturas del recorrido`};
+    }
+  }
+  if (a.alt_gps != null && b.alt_gps != null) { const ea = a.alt_acc && a.alt_acc < 99 ? a.alt_acc : 15, eb = b.alt_acc && b.alt_acc < 99 ? b.alt_acc : 15; return {s: (a.alt_gps - b.alt_gps) / d, se: Math.hypot(ea, eb) / d, d, dz: a.alt_gps - b.alt_gps, fuente: "altitud del GPS en los dos puntos"}; }
+  return null;
+}
+function pendientePrelimHtml(iA, iB) {
+  if (pendienteEntre(iA, iB)) return ""; const g = pendienteGPS(iA, iB); if (!g) return "";
+  return `<div class="nota">Pendiente preliminar con el GPS: <b>${nf(g.s, 4)} ± ${nf(g.se, 4)} m/m</b> (${esc(g.fuente)})${Math.abs(g.s) < 2 * g.se ? ' <b style="color:var(--ro)">— no se distingue de cero</b>' : ""}</div>`;
+}
 function pintarPuntos() {
   const c = C(), A = abscisas(), L = enlaces();
   const filas = c.puntos.map((p, i) => `<div class="card"><div class="pt"><b>${i + 1}. ${esc(p.nombre)}</b><span><button class="b g p" data-sube="${i}" ${i ? "" : "disabled"}>↑</button> <button class="b g p" data-baja="${i}" ${i < c.puntos.length - 1 ? "" : "disabled"}>↓</button> <button class="b g p" data-q="${i}" style="color:var(--ro)">Quitar</button></span></div>
@@ -224,6 +245,7 @@ function pintarPuntos() {
     ${campo("Latitud", `puntos.${i}.lat`, "n", p.lat, 'data-re="1"')}${campo("Longitud", `puntos.${i}.lon`, "n", p.lon, 'data-re="1"')}${campo("Precisión GPS (m)", `puntos.${i}.acc`, "n", p.acc)}${campo("Cota (m s. n. m.)", `puntos.${i}.cota`, "n", p.cota, 'data-re="1" placeholder="para la pendiente"')}</div>
     ${p.alt_gps != null ? `<div class="nota">Altitud medida por el GPS: <b>${nf(p.alt_gps, 0)} m</b>${p.alt_acc && p.alt_acc < 99 ? " (±" + nf(p.alt_acc, 0) + " m)" : ""}. El GPS da la altura con un error de 10 a 30 m: <b>no sirve para la pendiente de tramos cortos</b>. <button class="b g p" data-usaralt="${i}">Usar como cota</button></div>` : ""}
     ${(() => { const q = i ? pendienteEntre(i - 1, i) : null; return q ? `<div class="nota">Pendiente desde el punto anterior: <b>${nf(q.s, 4)} m/m</b> (desnivel ${nf(q.dz, 2)} m en ${nf(q.d, 0)} m)${q.s <= 0 ? ' <b style="color:var(--ro)">⚠ la cota de este punto debe ser menor que la del anterior</b>' : ""}</div>` : ""; })()}
+    ${i ? pendientePrelimHtml(i - 1, i) : ""}
     ${campo("Notas", `puntos.${i}.notas`, "t", p.notas)}
     <div class="nota">${A[i] === null ? "" : "Abscisa desde el primer punto: <b>" + nf(A[i], 0) + " m</b>"}${i ? ` · desde el punto anterior: <b>${nf(L[i - 1].d, 0)} m</b> (${L[i - 1].origen})` : ""}</div>
     <button class="b g p" data-reubicar="${i}" style="margin-top:.3rem">📍 Volver a tomar la ubicación aquí</button></div>`).join("");
@@ -276,7 +298,7 @@ async function marcarEnRecorrido() {
   const p = {id: pid(), nombre: nom || "Punto", rol, lat: ULT.lat, lon: ULT.lon, acc: Math.round(ULT.acc), alt_gps: ULT.alt ?? null, alt_acc: ULT.altAcc ?? null, cota: null, hora_iso: new Date().toISOString(), notas: "", hid: {}};
   const c = C(), iDe = c.puntos.findIndex(x => x.id === REC.de);
   c.puntos.splice(iDe + 1, 0, p);                       // queda justo después del punto de donde salió
-  REC.pts.push([ULT.lat, ULT.lon, ULT.t, Math.round(ULT.acc)]); cerrarTramo(p.id);
+  REC.pts.push([ULT.lat, ULT.lon, ULT.t, Math.round(ULT.acc), ULT.alt ?? null]); cerrarTramo(p.id);
   REC = {de: p.id, pts: [[p.lat, p.lon, Date.now(), 0]], t0: Date.now()}; guardar(); pintarRecorrido();
 }
 function detenerRecorrido() {
@@ -292,10 +314,11 @@ setInterval(() => { if (REC && TAB === "rec" && $("rec-vivo")) $("rec-vivo").inn
 // ------------------------------------------------------------------ PROGRAMAR
 let RES = null;
 function pendienteHtml(i, ii) {
-  const q1 = pendienteEntre(i - 1, i), q2 = i - 1 !== ii ? pendienteEntre(ii, i) : null;
+  const q1 = pendienteEntre(i - 1, i), q2 = i - 1 !== ii ? pendienteEntre(ii, i) : null, g1 = q1 ? null : pendienteGPS(i - 1, i), g2 = q2 || i - 1 === ii ? null : pendienteGPS(ii, i);
   const bt = (q, t) => q && q.s > 0 ? `<button class="b g p" data-pend="${i}|${q.s}" style="margin:.15rem .3rem .15rem 0">${t}: ${nf(q.s, 4)} m/m (${nf(q.dz, 2)} m en ${nf(q.d, 0)} m)</button>` : "";
+  const bg = (g, t) => g ? `<button class="b g p" data-pend="${i}|${g.s}" ${g.s > 0 ? "" : "disabled"} style="margin:.15rem .3rem .15rem 0">preliminar GPS ${t}: ${nf(g.s, 4)} ± ${nf(g.se, 4)} m/m</button><span class="nota"> ${esc(g.fuente)}${Math.abs(g.s) < 2 * g.se ? ' <b style="color:var(--ro)">— no se distingue de cero: mida cotas con nivel</b>' : ""} </span>` : "";
   const gps = (q1 && q1.gps) || (q2 && q2.gps), malo = [q1, q2].some(q => q && q.s <= 0);
-  return `<div class="nota" style="margin-top:.4rem">Pendiente con las cotas de «Puntos»: ${bt(q1, "del punto anterior")}${bt(q2, "desde la inyección")}${!q1 && !q2 ? "escriba la cota de este punto y del anterior (pestaña Puntos) y la app calcula desnivel ÷ distancia por el recorrido." : ""}${malo ? ' <b style="color:var(--ro)">⚠ una cota aguas abajo es mayor o igual que la de arriba.</b>' : ""}${gps ? ' <b style="color:var(--am)">⚠ hay cotas tomadas del GPS (error de 10 a 30 m): úselas solo si el desnivel es de varios metros.</b>' : ""}</div>`;
+  return `<div class="nota" style="margin-top:.4rem">Pendiente estimada (se corrige con cotas medidas en «Puntos»): ${bt(q1, "del punto anterior")}${bt(q2, "desde la inyección")}${bg(g1, "del punto anterior")}${bg(g2, "desde la inyección")}${!q1 && !q2 && !g1 && !g2 ? "marque la altitud con el GPS en los dos puntos, o escriba sus cotas (pestaña Puntos)." : ""}${malo ? ' <b style="color:var(--ro)">⚠ una cota aguas abajo es mayor o igual que la de arriba.</b>' : ""}${gps ? ' <b style="color:var(--am)">⚠ hay cotas tomadas del GPS (error de 10 a 30 m): úselas solo si el desnivel es de varios metros.</b>' : ""}</div>`;
 }
 function pintarProg() {
   const c = C(), E = estaciones(), P = c.params, ii = c.puntos.findIndex(p => p.rol === "inyeccion");
@@ -306,8 +329,6 @@ function pintarProg() {
   $("t-prog").innerHTML = `<p class="nota">Estima la masa de sal y los tiempos de registro (Fischer et al. 1979, pulso gaussiano). Las distancias salen del recorrido grabado; el caudal, ancho, profundidad y pendiente los mide o estima usted en el sitio (o los trae del modelo hidráulico). Es una estimación: D_L real puede variar de 2 a 5 veces.</p>
     ${aviso ? '<div class="adv">⚠ ' + aviso + "</div>" : ""}
     ${E.map(e => { const i = c.puntos.findIndex(p => p.id === e.id); return `<div class="card"><div class="pt"><b>${esc(e.nombre)}</b><span class="badge">${e.x_m === null ? "sin distancia" : nf(e.x_m, 0) + " m desde la inyección"}</span></div><div class="fila" style="margin-top:.4rem">${H.map(([k, t]) => campo(t, `puntos.${i}.hid.${k}`, "n", c.puntos[i].hid?.[k])).join("")}</div>${pendienteHtml(i, ii)}</div>`; }).join("")}
-    <details class="card"><summary><b>Convertir ángulo o porcentaje a pendiente (m/m)</b></summary><div class="fila" style="margin-top:.4rem"><label>Ángulo (°)<input id="cv-ang" type="text" inputmode="text" autocomplete="off"></label><label>Porcentaje (%)<input id="cv-pct" type="text" inputmode="text" autocomplete="off"></label></div><p class="nota" id="cv-res"></p>
-      <p class="nota">Cómo medirla en campo: (1) cota de cada punto con nivel de manguera o nivel topográfico, y la app calcula desnivel ÷ distancia por el recorrido; (2) clinómetro del celular apoyado sobre una regla que siga la lámina de agua; (3) cotas de un plano o de Google Earth, si el tramo es largo. Use tramos de 50 m o más: en tramos cortos un error de pocos centímetros cambia mucho la pendiente.</p></details>
     ${E.length > 1 ? '<button class="b g p" id="pr-copiar">Copiar los datos de la primera estación a las demás (vacíos)</button>' : ""}
     <details class="card"><summary><b>Parámetros del ensayo</b> <span class="nota">(valores de partida, por confirmar)</span></summary><div class="fila" style="margin-top:.4rem">
       <label>Inyección<select data-r="params.tipo_inyeccion" data-t="n"><option value="1"${P.tipo_inyeccion == 1 ? " selected" : ""}>Por la orilla</option><option value="2"${P.tipo_inyeccion == 2 ? " selected" : ""}>En el centro</option></select></label>
@@ -315,8 +336,6 @@ function pintarProg() {
     <button class="b" id="pr-calc" style="width:100%">Calcular masa de sal y tiempos</button><div id="pr-res"></div>`;
   $("pr-calc").onclick = calcular;
   document.querySelectorAll("[data-pend]").forEach(b => b.onclick = () => { const [i, v] = b.dataset.pend.split("|"), p = c.puntos[+i]; p.hid = p.hid || {}; p.hid.pendiente = Number(Number(v).toPrecision(4)); guardar(); pintarProg(); });
-  const conv = () => { const a = num($("cv-ang").value), q = num($("cv-pct").value); $("cv-res").innerHTML = a > 0 && a < 90 ? `${nf(a, 2)}° = <b>${nf(Math.tan(a * Math.PI / 180), 4)} m/m</b>` : q > 0 ? `${nf(q, 2)} % = <b>${nf(q / 100, 4)} m/m</b>` : ""; };
-  $("cv-ang").oninput = () => { $("cv-pct").value = ""; conv(); }; $("cv-pct").oninput = () => { $("cv-ang").value = ""; conv(); };
   if ($("pr-copiar")) $("pr-copiar").onclick = () => { const o = c.puntos.find(p => p.id === E[0].id).hid || {}; E.slice(1).forEach(e => { const p = c.puntos.find(x => x.id === e.id); p.hid = p.hid || {}; H.forEach(([k]) => { if (p.hid[k] == null && o[k] != null && k !== "tiempo_tramo_s") p.hid[k] = o[k]; }); }); guardar(); pintarProg(); };
   if (c.programacion && RES) mostrarResultado();
 }
