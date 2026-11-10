@@ -256,6 +256,7 @@ function pintarPuntos() {
     ${i ? pendientePrelimHtml(i - 1, i) : ""}
     ${campo("Notas", `puntos.${i}.notas`, "t", p.notas)}
     <div class="nota">${A[i] === null ? "" : "Abscisa desde el primer punto: <b>" + nf(A[i], 0) + " m</b>"}${i ? ` · desde el punto anterior: <b>${nf(L[i - 1].d, 0)} m</b> (${L[i - 1].origen})` : ""}</div>
+    ${fotosHtml("punto", p.id, ETQ_PUNTO)}
     <button class="b g p" data-reubicar="${i}" style="margin-top:.3rem">📍 Volver a tomar la ubicación aquí</button></div>`).join("");
   $("t-pun").innerHTML = `<p class="nota">Registre los puntos <b>como los encuentre en campo</b>, en el orden del río (aguas arriba primero). Puede cambiarlos cuando la planificación cambie.</p>
     <div class="card"><div class="fila"><label>Nombre del nuevo punto<input id="pt-nombre" type="text" placeholder="p. ej. Inyección, Estación 1…"></label><label>Función<select id="pt-rol">${ROLES.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select></label></div>
@@ -418,11 +419,11 @@ function pintarCampana() {
       <div class="fila" style="margin-top:.4rem">${campo("Sonda / serie", `registros.${p.id}.sonda`, "t", R.sonda)}${campo("EC de fondo (µS/cm)", `registros.${p.id}.ec_fondo`, "n", R.ec_fondo)}</div>
       <div class="fila" style="margin-top:.4rem">${campo("Sonda encendida (hora)", `registros.${p.id}.inicio`, "h", R.inicio)}${campo("Pico visto (hora)", `registros.${p.id}.pico`, "h", R.pico)}${campo("Sonda apagada (hora)", `registros.${p.id}.fin`, "h", R.fin)}</div>
       <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.4rem"><button class="b g p" data-ahora="${p.id}|inicio">Encendí la sonda</button><button class="b g p" data-ahora="${p.id}|pico">Vi el pico</button><button class="b g p" data-ahora="${p.id}|fin">Apagué la sonda</button></div>
-      ${campo("Notas", `registros.${p.id}.notas`, "t", R.notas)}</div>`; }).join("");
+      ${fotosHtml("estacion", p.id, ETQ_EST)}${campo("Notas", `registros.${p.id}.notas`, "t", R.notas)}</div>`; }).join("");
   $("t-camp").innerHTML = `<div class="card" style="text-align:center"><div class="nota">${term ? "ENSAYO TERMINADO" : T ? "Tiempo desde la inyección" : "Aún no se ha inyectado"}</div><div class="crono" id="c-crono">—</div>${control}</div>
     <details class="card" ${T ? "" : "open"}><summary><b>1 · Antes de inyectar</b></summary><div style="margin-top:.4rem">${CHECK.map((t, i) => `<label style="flex-direction:row;align-items:center;gap:.5rem;font-size:.95rem;color:#1d2433;margin:.3rem 0"><input type="checkbox" data-chk="${i}" style="width:auto" ${E.check?.[i] ? "checked" : ""}> ${t}</label>`).join("")}</div>
       <div class="fila" style="margin-top:.4rem">${campo("Masa de sal pesada (kg)", "inyeccion.masa_kg", "n", I.masa_kg)}${campo("Pureza (fracción)", "inyeccion.pureza", "n", I.pureza)}${campo("Agua usada (L)", "inyeccion.agua_l", "n", I.agua_l)}${campo("Sal (tipo, marca, lote)", "inyeccion.sal", "t", I.sal)}${campo("Hora de inyección", "inyeccion.hora", "h", I.hora, 'id="c-hora"')}</div>
-      ${T && !I.masa_kg ? '<div class="adv">⚠ Falta anotar la masa de sal pesada: sin ella no se puede evaluar el ensayo.</div>' : ""}</details>
+      ${T && !I.masa_kg ? '<div class="adv">⚠ Falta anotar la masa de sal pesada: sin ella no se puede evaluar el ensayo.</div>' : ""}<div style="margin-top:.5rem"><b>Fotos de la sal, la mezcla y la inyección</b>${fotosHtml("inyeccion", c.puntos.find(p => p.rol === "inyeccion")?.id, ETQ_INY)}</div></details>
     <h2>2 · Estaciones</h2>${estHtml || '<p class="nota">No hay estaciones de monitoreo: márquelas en «Puntos».</p>'}
     <h2>3 · Cierre</h2>
     <div class="card"><b>Aforos de campo</b>${c.aforos.map((a, i) => `<div class="fila" style="margin-top:.4rem">${campo("Punto", `aforos.${i}.punto`, "t", a.punto)}${campo("Q (L/s)", `aforos.${i}.q_ls`, "n", a.q_ls)}${campo("Hora", `aforos.${i}.hora`, "h", a.hora)}${campo("Método", `aforos.${i}.metodo`, "t", a.metodo)}<button class="b g p" data-qa="${i}" style="align-self:flex-end">Quitar</button></div>`).join("")}<div><button class="b g p" id="c-afo" style="margin-top:.4rem">+ Agregar aforo</button></div></div>
@@ -448,6 +449,103 @@ function actualizarEnsayo() {                 // se llama cada segundo: solo ref
 }
 setInterval(() => { revisarAvisos(); if (TAB === "camp") actualizarEnsayo(); }, 1000);
 
+// ------------------------------------------------------------------ FOTOS: registro fotográfico por punto y de la inyección (las imágenes viven en IndexedDB; los datos de cada foto, en la campaña)
+const ETQ_PUNTO = ["Vista general del sitio", "Sección transversal", "Hacia aguas arriba", "Hacia aguas abajo", "Sonda instalada", "Punto de inyección", "Vertimiento / afluente", "Otra"];
+const ETQ_INY = ["Sal pesada", "Mezcla (agua + sal)", "Momento de la inyección", "Otra"];
+const ETQ_EST = ["Sonda instalada", "Lectura o pico en la sonda", "Otra"];
+const FDB = {
+  db: null,
+  abrir() { return this.db ? Promise.resolve(this.db) : new Promise((res, rej) => { const r = indexedDB.open("ccp-campo-fotos", 1); r.onupgradeneeded = () => r.result.createObjectStore("fotos", {keyPath: "id"}); r.onsuccess = () => { this.db = r.result; res(this.db); }; r.onerror = () => rej(r.error); }); },
+  async tx(modo, fn) { const db = await this.abrir(); return new Promise((res, rej) => { const t = db.transaction("fotos", modo), q = fn(t.objectStore("fotos")); t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error); }); },
+  poner(r) { return this.tx("readwrite", s => s.put(r)); }, obtener(id) { return this.tx("readonly", s => s.get(id)); }, borrar(id) { return this.tx("readwrite", s => s.delete(id)); }
+};
+function procesarImagen(file, lineas, max = 1600) {      // reduce a 1600 px, dibuja un sello con los datos de la foto y genera una miniatura
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => { try {
+      const k = Math.min(1, max / Math.max(im.naturalWidth, im.naturalHeight)), w = Math.round(im.naturalWidth * k), h = Math.round(im.naturalHeight * k), cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+      const g = cv.getContext("2d"); g.drawImage(im, 0, 0, w, h);
+      const m = 160 / Math.max(w, h), cm = document.createElement("canvas"); cm.width = Math.max(1, Math.round(w * m)); cm.height = Math.max(1, Math.round(h * m)); cm.getContext("2d").drawImage(im, 0, 0, cm.width, cm.height);
+      if (lineas && lineas.length) { const fs = Math.max(12, Math.round(w / 38)), pd = Math.round(fs * 0.5), hh = Math.round(lineas.length * fs * 1.25 + pd * 2); g.fillStyle = "rgba(0,0,0,.55)"; g.fillRect(0, h - hh, w, hh); g.fillStyle = "#fff"; g.font = fs + "px sans-serif"; lineas.forEach((t, i) => g.fillText(t, pd, h - hh + pd + fs * 1.05 + i * fs * 1.25)); }
+      const mini = cm.toDataURL("image/jpeg", 0.6);
+      cv.toBlob(b => { URL.revokeObjectURL(url); b ? res({blob: b, w, h, mini}) : rej(new Error("no se pudo procesar la imagen")); }, "image/jpeg", 0.78);
+    } catch (e) { URL.revokeObjectURL(url); rej(e); } };
+    im.onerror = () => { URL.revokeObjectURL(url); rej(new Error("el archivo no es una imagen que el navegador pueda abrir")); };
+    im.src = url;
+  });
+}
+async function agregarFotos(files, ctx, puntoId, etiqueta) {
+  const c = C(), p = puntoId ? punto(puntoId) : null; let n = 0;
+  for (const f of files) {
+    try {
+      const iso = new Date().toISOString(), reciente = ULT && Date.now() - ULT.t < 120000;
+      const pos = reciente ? {lat: ULT.lat, lon: ULT.lon, acc: Math.round(ULT.acc), pos_origen: "gps"} : p && isFinite(p.lat) ? {lat: p.lat, lon: p.lon, acc: p.acc ?? null, pos_origen: "punto"} : {};
+      const lineas = [c.nombre, etiqueta + (p ? " · " + p.nombre : ""), new Date(iso).toLocaleString("es-CO"), pos.lat != null ? pos.lat.toFixed(5) + ", " + pos.lon.toFixed(5) + (pos.acc ? " (±" + pos.acc + " m)" : "") + (pos.pos_origen === "punto" ? " del punto" : "") : "sin posición"];
+      const r = await procesarImagen(f, lineas), id = "f" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+      await FDB.poner({id, camp: c.id, blob: r.blob});
+      (c.fotos = c.fotos || []).push({id, ctx, punto_id: puntoId || null, etiqueta, nota: "", iso, ...pos, w: r.w, h: r.h, kb: Math.round(r.blob.size / 1024), mini: r.mini}); guardar(); n++;
+    } catch (e) { alert("No se pudo guardar la foto «" + (f.name || "") + "»: " + e.message); }
+  }
+  if (n) mostrar();
+}
+function fotosHtml(ctx, puntoId, etqs) {
+  const c = C(), L = (c.fotos || []).filter(f => ctx === "inyeccion" ? f.ctx === "inyeccion" : f.punto_id === puntoId), k = ctx + "|" + (puntoId || "");
+  return `<div class="fotos" style="margin:.4rem 0"><div class="nota"><b>Fotos (${L.length})</b></div><div style="display:flex;gap:.35rem;flex-wrap:wrap;margin:.3rem 0">${L.map(f => `<img src="${f.mini}" data-foto="${f.id}" alt="${esc(f.etiqueta)}" title="${esc(f.etiqueta)}" style="height:64px;border-radius:.3rem;border:1px solid var(--bd)">`).join("")}</div>
+    <div style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center"><select data-fet="${k}" style="width:auto;flex:1 1 9rem">${etqs.map(t => `<option>${esc(t)}</option>`).join("")}</select>
+    <label class="btnl">📷 Tomar foto<input type="file" accept="image/*" capture="environment" data-fup="${k}" hidden></label><label class="btnl">🖼 Galería<input type="file" accept="image/*" multiple data-fup="${k}" hidden></label></div></div>`;
+}
+document.addEventListener("change", ev => {
+  const el = ev.target; if (!el.dataset || !el.dataset.fup) return;
+  const [ctx, pid] = el.dataset.fup.split("|"), sel = document.querySelector(`select[data-fet="${el.dataset.fup}"]`), files = [...el.files]; el.value = "";
+  if (files.length) agregarFotos(files, ctx, pid || null, sel ? sel.value : "");
+});
+document.addEventListener("click", ev => { const id = ev.target.dataset && ev.target.dataset.foto; if (id) abrirFoto(id); });
+async function abrirFoto(id) {
+  const c = C(), f = (c.fotos || []).find(x => x.id === id); if (!f) return;
+  const r = await FDB.obtener(id).catch(() => null), url = r && r.blob ? URL.createObjectURL(r.blob) : null, p = f.punto_id ? punto(f.punto_id) : null, v = document.createElement("div");
+  v.style.cssText = "position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.92);color:#fff;display:flex;flex-direction:column;padding:.6rem;gap:.5rem;overflow:auto";
+  v.innerHTML = `<div style="text-align:center">${url ? `<img src="${url}" style="max-width:100%;max-height:62vh;border-radius:.4rem">` : '<p>La imagen no está en este teléfono (solo se restauraron los datos). Restaure desde el archivo .zip para recuperarla.</p>'}</div>
+    <div style="font-size:.9rem">${esc(f.etiqueta)}${p ? " · " + esc(p.nombre) : ""} · ${new Date(f.iso).toLocaleString("es-CO")}${f.lat != null ? " · " + f.lat.toFixed(5) + ", " + f.lon.toFixed(5) : ""}</div>
+    <input id="v-nota" type="text" placeholder="Nota de la foto" value="${esc(f.nota)}"><div style="display:flex;gap:.5rem"><button class="b" id="v-ok" style="flex:1">Guardar y cerrar</button><button class="b r" id="v-del">Borrar foto</button></div>`;
+  document.body.appendChild(v);
+  const cerrar = () => { if (url) URL.revokeObjectURL(url); v.remove(); };
+  v.querySelector("#v-ok").onclick = () => { f.nota = v.querySelector("#v-nota").value; guardar(); cerrar(); };
+  v.querySelector("#v-del").onclick = async () => { if (!confirm("¿Borrar esta foto?")) return; c.fotos = c.fotos.filter(x => x.id !== id); await FDB.borrar(id).catch(() => {}); guardar(); cerrar(); mostrar(); };
+}
+// ---- .zip sin compresión (datos + fotos) para respaldar y compartir
+const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+const crc32 = u8 => { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+function crearZip(files) {
+  const enc = new TextEncoder(), parts = [], cd = []; let off = 0;
+  for (const f of files) {
+    const nm = enc.encode(f.name), crc = crc32(f.data), h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(12, 0x21, true); h.setUint32(14, crc, true); h.setUint32(18, f.data.length, true); h.setUint32(22, f.data.length, true); h.setUint16(26, nm.length, true);
+    parts.push(new Uint8Array(h.buffer), nm, f.data);
+    const c = new DataView(new ArrayBuffer(46)); c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true); c.setUint16(14, 0x21, true); c.setUint32(16, crc, true); c.setUint32(20, f.data.length, true); c.setUint32(24, f.data.length, true); c.setUint16(28, nm.length, true); c.setUint32(42, off, true);
+    cd.push(new Uint8Array(c.buffer), nm); off += 30 + nm.length + f.data.length;
+  }
+  const cdSize = cd.reduce((s, x) => s + x.length, 0), e = new DataView(new ArrayBuffer(22)); e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, cdSize, true); e.setUint32(16, off, true);
+  return new Blob([...parts, ...cd, new Uint8Array(e.buffer)], {type: "application/zip"});
+}
+async function leerZip(buf) {
+  const u8 = new Uint8Array(buf), dv = new DataView(buf); let e = u8.length - 22; while (e >= 0 && dv.getUint32(e, true) !== 0x06054b50) e--;
+  if (e < 0) throw new Error("no es un .zip válido"); const n = dv.getUint16(e + 10, true), dec = new TextDecoder(), out = new Map(); let p = dv.getUint32(e + 16, true);
+  for (let i = 0; i < n; i++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const met = dv.getUint16(p + 10, true), csz = dv.getUint32(p + 20, true), nl = dv.getUint16(p + 28, true), xl = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true), lo = dv.getUint32(p + 42, true), name = dec.decode(u8.subarray(p + 46, p + 46 + nl)); p += 46 + nl + xl + cl;
+    const ds = lo + 30 + dv.getUint16(lo + 26, true) + dv.getUint16(lo + 28, true); let data = u8.subarray(ds, ds + csz);
+    if (met === 8) data = new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer()); else if (met !== 0) throw new Error("el .zip usa una compresión no compatible");
+    out.set(name, data);
+  }
+  return out;
+}
+function marcarRespaldo() { C().exp = Date.now() + 1; guardar(true); pintarResp(); const u = $("ult-resp"); if (u) u.textContent = new Date(C().exp).toLocaleString("es-CO"); }
+async function construirZip() {
+  const c = C(), files = [{name: "campana.json", data: new TextEncoder().encode(JSON.stringify(datosExport(), null, 1))}];
+  for (const f of c.fotos || []) { const r = await FDB.obtener(f.id).catch(() => null); if (r && r.blob) files.push({name: "fotos/" + f.id + ".jpg", data: new Uint8Array(await r.blob.arrayBuffer())}); }
+  marcarRespaldo(); return crearZip(files);
+}
+
 // ------------------------------------------------------------------ GUARDAR (exportar / importar)
 const slug = t => (t || "campana").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9]+/g, "_").slice(0, 40);
 const base = () => "campo_trazadores_" + slug(C().nombre) + "_" + C().fecha;
@@ -457,7 +555,7 @@ function datosExport() {
   return {formato: "ccp-bitacora-trazadores", version: 2, proyecto_id: null, campana_id: c.id, exportado: new Date().toISOString(), campana: {nombre: c.nombre, fecha: c.fecha, responsable: c.responsable, cuadrilla: c.cuadrilla, clima: c.clima},
     inyeccion: {masa_kg: c.inyeccion.masa_kg, pureza: c.inyeccion.pureza, agua_l: c.inyeccion.agua_l, hora: c.inyeccion.hora, t0_iso: c.inyeccion.t0_iso, sal: c.inyeccion.sal, punto: c.puntos[ii]?.nombre || ""},
     puntos: c.puntos.map((p, i) => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, precision_m: p.acc, cota: p.cota ?? null, cota_origen: p.cota_origen ?? null, alt_gps: p.alt_gps ?? null, alt_acc: p.alt_acc ?? null, notas: p.notas, abscisa_m: A[i], dist_anterior_m: i ? L[i - 1].d : null, origen_distancia: i ? L[i - 1].origen : null, dist_desde_inyeccion_m: ii >= 0 && A[i] !== null && A[ii] !== null ? A[i] - A[ii] : null, hidraulica: p.hid})),
-    ensayo: {estado: ens().estado, t_fin_iso: ens().t_fin_iso, check: ens().check || {}}, tramos: c.tramos, parametros: c.params, programacion: c.programacion, registro_estaciones: Object.fromEntries(Object.entries(c.registros).map(([id, r]) => [punto(id)?.nombre || id, r])), aforos: c.aforos, eventos: c.eventos, observaciones: c.observaciones};
+    fotos: c.fotos || [], ensayo: {estado: ens().estado, t_fin_iso: ens().t_fin_iso, check: ens().check || {}}, tramos: c.tramos, parametros: c.params, programacion: c.programacion, registro_estaciones: Object.fromEntries(Object.entries(c.registros).map(([id, r]) => [punto(id)?.nombre || id, r])), aforos: c.aforos, eventos: c.eventos, observaciones: c.observaciones};
 }
 function blobJson() { const b = new Blob([JSON.stringify(datosExport(), null, 1)], {type: "application/json"}); C().exp = Date.now() + 1; guardar(true); pintarResp(); const u = $("ult-resp"); if (u) u.textContent = new Date(C().exp).toLocaleString("es-CO"); return b; }
 function csv() {
@@ -487,28 +585,37 @@ function pintarGuardar() {
   $("t-exp").innerHTML = `<h2>Sacar los datos del teléfono</h2><div class="card" style="border-color:var(--am)"><b>¿Dónde queda lo que escribo?</b><p class="nota">Se guarda solo, automáticamente, <b>dentro de este navegador del teléfono</b>. Si borra la app, la desinstala o limpia los datos del navegador, <b>se pierde</b>. La copia segura es el archivo <b>.json</b>: descárguelo o compártalo (WhatsApp, correo, Drive) al terminar cada tramo del trabajo y siempre antes de borrar o reinstalar la app. Almacenamiento protegido por el navegador: <b>${DB.persistente ? "sí" : "no confirmado"}</b>.</p></div>
     <p class="nota">Campaña: <b>${esc(c.nombre)}</b> · ${c.puntos.length} puntos · ${c.tramos.length} tramos grabados · último respaldo: <b id="ult-resp">${c.exp ? new Date(c.exp).toLocaleString("es-CO") : "ninguno"}</b>.</p>
     <div class="card"><button class="b" id="x-comp" style="width:100%;margin:.2rem 0">Compartir / enviar (WhatsApp, correo, Drive…)</button>
-    <button class="b g" id="x-json" style="width:100%;margin:.2rem 0">Descargar todo (.json) — para la plataforma</button><button class="b g" id="x-kml" style="width:100%;margin:.2rem 0">Puntos y recorrido (.kml) — para Google Earth y el paso 1</button>
+    <button class="b g" id="x-zip" style="width:100%;margin:.2rem 0">Descargar todo con fotos (.zip)</button><button class="b g" id="x-json" style="width:100%;margin:.2rem 0">Descargar solo los datos (.json)</button><button class="b g" id="x-kml" style="width:100%;margin:.2rem 0">Puntos y recorrido (.kml) — para Google Earth y el paso 1</button>
     <button class="b g" id="x-gpx" style="width:100%;margin:.2rem 0">Puntos y recorrido (.gpx)</button><button class="b g" id="x-csv" style="width:100%;margin:.2rem 0">Resumen (.csv) — para Excel</button><p class="nota" id="x-msg"></p></div>
     <h2>Cargar una campaña guardada</h2><div class="card"><input type="file" id="x-file" accept="*/*"><p class="nota" id="x-file-msg" style="font-weight:600"></p><p class="nota">Para continuar una campaña o recuperarla (el archivo .json de «Descargar todo» o «Compartir»). Si el selector solo muestra el teléfono, toque el menú ☰ (arriba a la izquierda) y elija <b>Drive</b>; si Drive no aparece, abra el archivo en la app de Drive, toque ⋮ → <b>Descargar</b> y búsquelo en «Descargas».</p></div>
     <details class="card"><summary><b>Si no logra elegir el archivo: pegar su contenido</b></summary><p class="nota">Abra el .json en el teléfono (Drive lo muestra como texto), toque «seleccionar todo», copie y pegue aquí.</p><textarea id="x-pegar" placeholder="Pegue aquí todo el texto del archivo .json" style="min-height:6rem"></textarea><button class="b g" id="x-pegar-ok" style="margin-top:.4rem">Cargar el texto pegado</button></details>
     <h2>Campañas en este teléfono</h2><div class="card">${DB.campanas.map(k => `<div class="pt" style="padding:.25rem 0"><span>${esc(k.nombre)} <span class="nota">(${k.puntos.length} puntos)</span></span>${DB.campanas.length > 1 ? `<button class="b g p" data-del="${k.id}" style="color:var(--ro)">Borrar</button>` : ""}</div>`).join("")}</div>
     <h2>Instalar en el celular</h2><div class="card">${instalada ? "<p>✔ Ya está instalada.</p>" : PROMPT_INSTALAR ? '<button class="b" id="x-inst" style="width:100%">Anclar a la pantalla de inicio</button>' : ios ? '<p class="nota">En iPhone: abra esta página en Safari, toque el botón Compartir y elija «Agregar a pantalla de inicio».</p>' : '<p class="nota">En Android: menú ⋮ del navegador → «Instalar aplicación» o «Agregar a pantalla de inicio». Si no aparece, la página debe abrirse con https://.</p>'}
     <p class="nota">${"serviceWorker" in navigator && navigator.serviceWorker.controller ? "✔ Guardada para trabajar sin internet." : "Aún no está guardada para usarla sin internet (ábrala una vez con conexión)."}</p></div>`;
+  $("x-zip").onclick = async () => { descargar(await construirZip(), base() + ".zip"); $("x-msg").textContent = "Descargado (carpeta Descargas): incluye los datos y las fotos."; };
   $("x-json").onclick = () => { descargar(blobJson(), base() + ".json"); $("x-msg").textContent = "Descargado (carpeta Descargas)."; };
   $("x-csv").onclick = () => descargar(csv(), base() + ".csv"); $("x-gpx").onclick = () => descargar(gpx(), base() + ".gpx"); $("x-kml").onclick = () => descargar(kml(), base() + ".kml");
-  $("x-comp").onclick = async () => { const f = new File([blobJson()], base() + ".json", {type: "application/json"}); if (navigator.canShare && navigator.canShare({files: [f]})) { try { await navigator.share({files: [f], title: c.nombre}); $("x-msg").textContent = "Enviado."; } catch (e) { if (e.name !== "AbortError") $("x-msg").textContent = "No se pudo compartir: " + e.message; } } else { descargar(f, f.name); $("x-msg").textContent = "Este navegador no comparte archivos: se descargó."; } };
+  $("x-comp").onclick = async () => { const conFotos = (c.fotos || []).length > 0, f = conFotos ? new File([await construirZip()], base() + ".zip", {type: "application/zip"}) : new File([blobJson()], base() + ".json", {type: "application/json"}); if (navigator.canShare && navigator.canShare({files: [f]})) { try { await navigator.share({files: [f], title: c.nombre}); $("x-msg").textContent = "Enviado."; } catch (e) { if (e.name !== "AbortError") $("x-msg").textContent = "No se pudo compartir: " + e.message; } } else { descargar(f, f.name); $("x-msg").textContent = "Este navegador no comparte archivos: se descargó."; } };
   const msgArchivo = (t, err) => { const m = $("x-file-msg"); if (m) { m.style.color = err ? "var(--ro)" : "var(--ok)"; m.textContent = t; } if (err) alert(t); };
-  const importar = texto => { try { const d = JSON.parse(texto); if (d.formato !== "ccp-bitacora-trazadores" || d.version !== 2) throw new Error("No es un archivo de esta app."); const k = nueva(d.campana?.nombre); Object.assign(k, {id: d.campana_id || k.id, nombre: d.campana?.nombre || k.nombre, fecha: d.campana?.fecha || k.fecha, responsable: d.campana?.responsable || "", cuadrilla: d.campana?.cuadrilla || "", clima: d.campana?.clima || "", observaciones: d.observaciones || "",
+  const importar = (texto, blobs) => { try { const d = JSON.parse(texto); if (d.formato !== "ccp-bitacora-trazadores" || d.version !== 2) throw new Error("No es un archivo de esta app."); const k = nueva(d.campana?.nombre); Object.assign(k, {id: d.campana_id || k.id, fotos: d.fotos || [], nombre: d.campana?.nombre || k.nombre, fecha: d.campana?.fecha || k.fecha, responsable: d.campana?.responsable || "", cuadrilla: d.campana?.cuadrilla || "", clima: d.campana?.clima || "", observaciones: d.observaciones || "",
       puntos: (d.puntos || []).map(p => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, acc: p.precision_m, cota: p.cota ?? null, cota_origen: p.cota_origen ?? null, alt_gps: p.alt_gps ?? null, alt_acc: p.alt_acc ?? null, notas: p.notas || "", hid: p.hidraulica || {}})), tramos: d.tramos || [], params: {...PARAM0, ...(d.parametros || {})}, aforos: d.aforos || [], eventos: d.eventos || [], programacion: d.programacion || null,
       inyeccion: {...k.inyeccion, masa_kg: d.inyeccion?.masa_kg ?? null, pureza: d.inyeccion?.pureza ?? 0.95, agua_l: d.inyeccion?.agua_l ?? null, hora: d.inyeccion?.hora || "", t0_iso: d.inyeccion?.t0_iso || null, sal: d.inyeccion?.sal || ""}});
       k.ensayo = d.ensayo ? {estado: d.ensayo.estado || "preparando", t_fin_iso: d.ensayo.t_fin_iso || null, check: d.ensayo.check || {}, avisos: {}} : undefined; k.registros = {}; Object.entries(d.registro_estaciones || {}).forEach(([nom, r]) => { const p = k.puntos.find(x => x.nombre === nom); if (p) k.registros[p.id] = r; });
-      DB.campanas = DB.campanas.filter(x => x.id !== k.id); DB.campanas.push(k); k.exp = k.mod = Date.now() + 1; DB.activa = k.id; guardar(true); pintarCabecera(); pintarGuardar(); msgArchivo("✔ Campaña cargada: " + k.nombre + " (" + k.puntos.length + " puntos)."); } catch (e) { msgArchivo(e instanceof SyntaxError ? "El archivo no es un .json válido (¿está incompleto o es otro tipo de archivo?)." : "No se pudo cargar: " + e.message, true); } };
+      DB.campanas = DB.campanas.filter(x => x.id !== k.id); DB.campanas.push(k); k.exp = k.mod = Date.now() + 1; DB.activa = k.id; guardar(true); pintarCabecera(); pintarGuardar(); if (blobs) blobs.forEach((bl, id) => FDB.poner({id, camp: k.id, blob: bl})); msgArchivo("✔ Campaña cargada: " + k.nombre + " (" + k.puntos.length + " puntos" + (k.fotos.length ? ", " + k.fotos.length + " fotos" + (blobs ? "" : " — sin las imágenes: use el .zip para recuperarlas") : "") + ")."); } catch (e) { msgArchivo(e instanceof SyntaxError ? "El archivo no es un .json válido (¿está incompleto o es otro tipo de archivo?)." : "No se pudo cargar: " + e.message, true); } };
   const leer = f => new Promise((res, rej) => { try { f.text().then(res, () => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error("leer")); r.readAsText(f); }); } catch (e) { rej(e); } });
+  const importarArchivo = async f => {
+    const buf = await (f.arrayBuffer ? f.arrayBuffer().catch(() => null) : null) || await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error("leer")); r.readAsArrayBuffer(f); }), b2 = new Uint8Array(buf, 0, 2);
+    if (b2[0] === 0x50 && b2[1] === 0x4b) {                                             // .zip: datos + fotos
+      const m = await leerZip(buf), j = m.get("campana.json"); if (!j) throw new Error("el .zip no trae campana.json"); const blobs = new Map();
+      m.forEach((data, name) => { if (name.startsWith("fotos/")) blobs.set(name.slice(6).replace(/\.jpg$/, ""), new Blob([data], {type: "image/jpeg"})); });
+      importar(new TextDecoder().decode(j), blobs);
+    } else importar(new TextDecoder().decode(buf));
+  };
   $("x-file").onchange = async ev => { const f = ev.target.files[0]; if (!f) return; msgArchivo("Leyendo «" + f.name + "» (" + Math.max(1, Math.round(f.size / 1024)) + " KB)…");
-    try { importar(await leer(f)); } catch (e) { msgArchivo("No se pudo leer «" + f.name + "». Si está en Drive: ábralo en la app de Drive, toque ⋮ → Descargar, y elíjalo desde «Descargas»; o use «pegar su contenido» aquí abajo.", true); }
+    try { await importarArchivo(f); } catch (e) { msgArchivo("No se pudo leer «" + f.name + "». Si está en Drive: ábralo en la app de Drive, toque ⋮ → Descargar, y elíjalo desde «Descargas»; o use «pegar su contenido» aquí abajo.", true); }
     ev.target.value = ""; };
   $("x-pegar-ok").onclick = () => { const t = $("x-pegar").value.trim(); if (!t) return msgArchivo("Pegue primero el texto del archivo.", true); importar(t); };
-  document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => { const k = DB.campanas.find(x => x.id === b.dataset.del); if (confirm("¿Borrar «" + k.nombre + "» de este teléfono? Si no la descargó, se pierde.")) { DB.campanas = DB.campanas.filter(x => x !== k); if (DB.activa === k.id) DB.activa = DB.campanas[0].id; guardar(); pintarCabecera(); pintarGuardar(); } });
+  document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => { const k = DB.campanas.find(x => x.id === b.dataset.del); if (confirm("¿Borrar «" + k.nombre + "» de este teléfono? Si no la descargó, se pierde (también sus fotos).")) { (k.fotos || []).forEach(f => FDB.borrar(f.id).catch(() => {})); DB.campanas = DB.campanas.filter(x => x !== k); if (DB.activa === k.id) DB.activa = DB.campanas[0].id; guardar(); pintarCabecera(); pintarGuardar(); } });
   if ($("x-inst")) $("x-inst").onclick = async () => { PROMPT_INSTALAR.prompt(); await PROMPT_INSTALAR.userChoice; PROMPT_INSTALAR = null; pintarGuardar(); };
 }
 
