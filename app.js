@@ -371,34 +371,82 @@ function curva(R) {
   $("pr-graf").innerHTML = s;
 }
 
-// ------------------------------------------------------------------ CAMPAÑA (bitácora)
+// ------------------------------------------------------------------ ENSAYO (el día de la prueba: guía paso a paso, contador, avisos y parada)
+const CHECK = ["Sondas encendidas y con la hora del celular sincronizada", "Sal pesada (anote la masa abajo)", "Agua lista para disolverla (balde)", "Sondas puestas en el hilo de la corriente", "Pantalla encendida y batería cargada"];
+function ens() { const c = C(); return c.ensayo || (c.ensayo = {estado: "preparando", t_fin_iso: null, check: {}, avisos: {}}); }
 function t0() { const c = C(); return c.inyeccion.t0_iso ? new Date(c.inyeccion.t0_iso) : null; }
 function fechaHora(h) { const c = C(), f = new Date((c.fecha || new Date().toISOString().slice(0, 10)) + "T00:00:00"), [a, b, s] = h.split(":").map(Number); f.setHours(a, b, s || 0, 0); return f; }
 function evento(txt) { C().eventos.push({iso: new Date().toISOString(), hora: horaTxt(new Date()), texto: txt}); guardar(); }
+const mmss = s => { const a = Math.abs(Math.round(s)); return pad(Math.floor(a / 60)) + ":" + pad(a % 60); };
+const hhmmss = s => { const a = Math.abs(Math.round(s)); return pad(Math.floor(a / 3600)) + ":" + pad(Math.floor(a % 3600 / 60)) + ":" + pad(a % 60); };
+function transcurrido() { const T = t0(), E = ens(); if (!T) return null; const fin = E.estado === "terminado" && E.t_fin_iso ? new Date(E.t_fin_iso) : new Date(); return (fin.getTime() - T.getTime()) / 1000; }
+let AC = null;
+function prepararSonido() { try { AC = AC || new (window.AudioContext || window.webkitAudioContext)(); if (AC.state === "suspended") AC.resume(); } catch (e) {} }
+function beep() { try { prepararSonido(); [0, 0.35, 0.7].forEach(d => { const o = AC.createOscillator(), g = AC.createGain(); o.frequency.value = 880; g.gain.value = 0.25; o.connect(g); g.connect(AC.destination); o.start(AC.currentTime + d); o.stop(AC.currentTime + d + 0.22); }); } catch (e) {} }
+function avisar(txt) {
+  const b = $("aviso-ensayo"); if (!b) return;
+  b.innerHTML = `<span>🔔 ${esc(txt)}</span><button class="b p" id="aviso-ok">Entendido</button>`; b.style.display = "flex"; $("aviso-ok").onclick = () => { b.style.display = "none"; };
+  try { if (navigator.vibrate) navigator.vibrate([400, 150, 400, 150, 400]); } catch (e) {} beep();
+}
+function estadoEstacion(p) {
+  const c = C(), E = ens(), T = t0(), pr = c.programacion?.estaciones.find(e => e.id === p.id);
+  if (E.estado === "terminado") return {cl: "ya", h: "Ensayo terminado."};
+  if (!T) return {cl: "", h: pr ? `Programado: iniciar a los <b>${nf(pr.ini_min, 1)} min</b>, pico a los <b>${nf(pr.t_pico_min, 1)} min</b>, terminar a los <b>${nf(pr.fin_min, 1)} min</b> de inyectar.` : "Calcule la programación (pestaña Programar) para ver las horas de esta estación."};
+  if (!pr) return {cl: "", h: "Calcule la programación (pestaña Programar) para ver las horas de esta estación."};
+  const t = (Date.now() - T.getTime()) / 1000, ini = pr.ini_min * 60, pico = pr.t_pico_min * 60, fin = pr.fin_min * 60, clk = m => horaTxt(new Date(T.getTime() + m * 60000));
+  if (t < ini) return {cl: "", h: `Iniciar el registro a las <b>${clk(pr.ini_min)}</b> — faltan <b>${mmss(ini - t)}</b>`};
+  if (t < fin) return {cl: "ahora", h: `<span class="badge" style="background:var(--ro);color:#fff">REGISTRANDO</span> pico esperado a las <b>${clk(pr.t_pico_min)}</b> (${t < pico ? "en " + mmss(pico - t) : "hace " + mmss(t - pico)}) · terminar a las <b>${clk(pr.fin_min)}</b> — faltan <b>${mmss(fin - t)}</b>`};
+  return {cl: "ya", h: `Ventana terminada a las <b>${clk(pr.fin_min)}</b>. Apague la sonda y anote la hora.`};
+}
+function revisarAvisos() {                  // avisos con sonido y vibración: 2 min antes de iniciar, al iniciar, al pico esperado y al terminar cada estación
+  const c = C(), E = ens(), T = t0(); if (!T || E.estado !== "en_curso" || !c.programacion) return;
+  const t = (Date.now() - T.getTime()) / 1000, textos = []; E.avisos = E.avisos || {};
+  c.puntos.filter(p => p.rol === "monitoreo").forEach(p => { const pr = c.programacion.estaciones.find(e => e.id === p.id); if (!pr) return;
+    [["pre", pr.ini_min * 60 - 120, `En 2 minutos: iniciar el registro en «${p.nombre}»`], ["ini", pr.ini_min * 60, `INICIAR el registro en «${p.nombre}» ahora`], ["pico", pr.t_pico_min * 60, `Pico esperado en «${p.nombre}» ahora`], ["fin", pr.fin_min * 60, `TERMINAR el registro en «${p.nombre}»`]].forEach(([k, tev, txt]) => {
+      const key = p.id + k; if (E.avisos[key] || t < tev) return; E.avisos[key] = true;
+      if (tev > 0 && t - tev <= 180) textos.push(txt);                                      // si la app estuvo cerrada y el aviso es viejo, no se repite
+    }); });
+  if (textos.length) { guardar(true); avisar(textos.join(" · ")); }
+}
 function pintarCampana() {
-  const c = C(), I = c.inyeccion, E = c.puntos.filter(p => p.rol === "monitoreo"), prog = id => c.programacion?.estaciones.find(e => e.id === id), T0 = t0(), ahora = new Date();
-  const ptsEst = E.map(p => { const i = c.puntos.indexOf(p), R = c.registros[p.id] || (c.registros[p.id] = {}), pr = prog(p.id); let est = "", cl = "";
-    if (pr && T0) { const ini = new Date(T0.getTime() + pr.ini_min * 60000), fin = new Date(T0.getTime() + pr.fin_min * 60000), pico = new Date(T0.getTime() + pr.t_pico_min * 60000); cl = ahora > fin ? "ya" : (ahora >= ini ? "ahora" : "");
-      est = `<div class="nota">Iniciar el registro: <b>${horaTxt(ini)}</b> · pico esperado: <b>${horaTxt(pico)}</b> · terminar: <b>${horaTxt(fin)}</b></div>` + (cl === "ahora" ? '<span class="badge" style="background:var(--ro);color:#fff">REGISTRANDO AHORA</span>' : cl === "ya" ? '<span class="badge">ventana terminada</span>' : ""); }
-    else est = '<div class="nota">Calcule la programación (pestaña Programar) y marque la hora de inyección para ver las horas.</div>';
-    return `<div class="card est ${cl}"><b>${esc(p.nombre)}</b>${est}<div class="fila" style="margin-top:.4rem">${campo("Sonda / serie", `registros.${p.id}.sonda`, "t", R.sonda)}${campo("Inicio real", `registros.${p.id}.inicio`, "h", R.inicio)}${campo("Fin real", `registros.${p.id}.fin`, "h", R.fin)}${campo("EC de fondo medida (µS/cm)", `registros.${p.id}.ec_fondo`, "n", R.ec_fondo)}${campo("Llegada del pico", `registros.${p.id}.pico`, "h", R.pico)}</div>${campo("Notas", `registros.${p.id}.notas`, "t", R.notas)}<button class="b g p" data-pico="${p.id}" style="margin-top:.4rem">Hora actual = pico</button></div>`; }).join("");
-  $("t-camp").innerHTML = `<p class="nota">Todo se guarda en este teléfono. Al terminar, vaya a «Guardar» y envíese el archivo.</p>
-    <h2>Datos de la campaña</h2><div class="card fila">${campo("Nombre", "nombre", "t", c.nombre, 'data-re="1"')}${campo("Fecha", "fecha", "f", c.fecha)}${campo("Responsable", "responsable", "t", c.responsable)}${campo("Cuadrilla", "cuadrilla", "t", c.cuadrilla)}${campo("Clima / condición del cauce", "clima", "t", c.clima)}</div>
-    <h2>Inyección del trazador</h2><div class="card"><div class="fila">${campo("Masa de sal pesada (kg)", "inyeccion.masa_kg", "n", I.masa_kg)}${campo("Pureza (fracción)", "inyeccion.pureza", "n", I.pureza)}${campo("Agua usada (L)", "inyeccion.agua_l", "n", I.agua_l)}${campo("Hora real de inyección", "inyeccion.hora", "h", I.hora, 'id="c-hora"')}${campo("Sal (tipo, marca, lote)", "inyeccion.sal", "t", I.sal)}</div>
-    <button class="b" id="c-ahora" style="width:100%;margin-top:.5rem">⏱ Inyecté ahora</button><div class="crono" id="c-crono">—</div><p class="nota" id="c-crono-n" style="text-align:center"></p></div>
-    <h2>Estaciones de registro</h2>${ptsEst || '<p class="nota">No hay estaciones de monitoreo: márquelas en «Puntos».</p>'}
-    <h2>Aforos de campo</h2>${c.aforos.map((a, i) => `<div class="card"><div class="fila">${campo("Punto", `aforos.${i}.punto`, "t", a.punto)}${campo("Q (L/s)", `aforos.${i}.q_ls`, "n", a.q_ls)}${campo("Hora", `aforos.${i}.hora`, "h", a.hora)}${campo("Método", `aforos.${i}.metodo`, "t", a.metodo)}</div><button class="b g p" data-qa="${i}" style="margin-top:.4rem">Quitar</button></div>`).join("")}<button class="b g p" id="c-afo">+ Agregar aforo</button>
-    <h2>Eventos y observaciones</h2><div class="card"><div class="fila"><label style="flex:3">Nota<input id="c-ev-txt" type="text" placeholder="p. ej. sonda en el hilo de la corriente"></label><button class="b" id="c-ev" style="align-self:flex-end">Anotar con la hora</button></div><div class="scroll"><table id="c-evt"></table></div></div>
-    <label>Observaciones generales<textarea data-r="observaciones">${esc(c.observaciones)}</textarea></label>`;
-  $("c-ahora").onclick = () => { const f = new Date(); I.hora = horaTxt(f); I.t0_iso = f.toISOString(); c.fecha = f.toISOString().slice(0, 10); evento("Inyección del trazador"); guardar(); pintarCampana(); };
-  $("c-hora").addEventListener("change", () => { const h = $("c-hora").value; I.hora = h; I.t0_iso = h ? fechaHora(h).toISOString() : null; guardar(); pintarCampana(); });
-  document.querySelectorAll("[data-pico]").forEach(b => b.onclick = () => { (c.registros[b.dataset.pico]).pico = horaTxt(new Date()); evento("Pico visto en " + punto(b.dataset.pico).nombre); pintarCampana(); });
+  const c = C(), E = ens(), I = c.inyeccion, T = t0(), term = E.estado === "terminado", X = estaciones(), est = c.puntos.filter(p => p.rol === "monitoreo");
+  const control = !T ? `<button class="b" id="c-iny" style="width:100%;font-size:1.25rem;padding:1rem">💧 INYECTAR AHORA</button><p class="nota">Toque el botón en el instante en que vierte la sal: marca la hora y arranca el contador. Si ya inyectó, escriba la hora abajo.</p>`
+    : term ? `<div class="nota">Terminó a las <b>${E.t_fin_iso ? horaTxt(new Date(E.t_fin_iso)) : "—"}</b> · duración total <b>${E.t_fin_iso ? hhmmss(transcurrido()) : "—"}</b></div><button class="b g" id="c-reabrir" style="width:100%;margin-top:.4rem">Reabrir el ensayo</button>`
+    : `<button class="b r" id="c-parar" style="width:100%;font-size:1.1rem;padding:.9rem">■ PARAR EL ENSAYO</button><button class="b g p" id="c-anular" style="margin-top:.5rem">Anular la inyección (me equivoqué)</button>`;
+  const estHtml = est.map(p => { const R = c.registros[p.id] || (c.registros[p.id] = {}), s = estadoEstacion(p), x = X.find(e => e.id === p.id)?.x_m;
+    return `<div class="card est ${s.cl}" id="card-${p.id}"><div class="pt"><b>${esc(p.nombre)}</b><span class="badge">${x == null ? "sin distancia" : nf(x, 0) + " m desde la inyección"}</span></div><div class="nota" id="st-${p.id}">${s.h}</div>
+      <div class="fila" style="margin-top:.4rem">${campo("Sonda / serie", `registros.${p.id}.sonda`, "t", R.sonda)}${campo("EC de fondo (µS/cm)", `registros.${p.id}.ec_fondo`, "n", R.ec_fondo)}</div>
+      <div class="fila" style="margin-top:.4rem">${campo("Sonda encendida (hora)", `registros.${p.id}.inicio`, "h", R.inicio)}${campo("Pico visto (hora)", `registros.${p.id}.pico`, "h", R.pico)}${campo("Sonda apagada (hora)", `registros.${p.id}.fin`, "h", R.fin)}</div>
+      <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.4rem"><button class="b g p" data-ahora="${p.id}|inicio">Encendí la sonda</button><button class="b g p" data-ahora="${p.id}|pico">Vi el pico</button><button class="b g p" data-ahora="${p.id}|fin">Apagué la sonda</button></div>
+      ${campo("Notas", `registros.${p.id}.notas`, "t", R.notas)}</div>`; }).join("");
+  $("t-camp").innerHTML = `<div class="card" style="text-align:center"><div class="nota">${term ? "ENSAYO TERMINADO" : T ? "Tiempo desde la inyección" : "Aún no se ha inyectado"}</div><div class="crono" id="c-crono">—</div>${control}</div>
+    <details class="card" ${T ? "" : "open"}><summary><b>1 · Antes de inyectar</b></summary><div style="margin-top:.4rem">${CHECK.map((t, i) => `<label style="flex-direction:row;align-items:center;gap:.5rem;font-size:.95rem;color:#1d2433;margin:.3rem 0"><input type="checkbox" data-chk="${i}" style="width:auto" ${E.check?.[i] ? "checked" : ""}> ${t}</label>`).join("")}</div>
+      <div class="fila" style="margin-top:.4rem">${campo("Masa de sal pesada (kg)", "inyeccion.masa_kg", "n", I.masa_kg)}${campo("Pureza (fracción)", "inyeccion.pureza", "n", I.pureza)}${campo("Agua usada (L)", "inyeccion.agua_l", "n", I.agua_l)}${campo("Sal (tipo, marca, lote)", "inyeccion.sal", "t", I.sal)}${campo("Hora de inyección", "inyeccion.hora", "h", I.hora, 'id="c-hora"')}</div>
+      ${T && !I.masa_kg ? '<div class="adv">⚠ Falta anotar la masa de sal pesada: sin ella no se puede evaluar el ensayo.</div>' : ""}</details>
+    <h2>2 · Estaciones</h2>${estHtml || '<p class="nota">No hay estaciones de monitoreo: márquelas en «Puntos».</p>'}
+    <h2>3 · Cierre</h2>
+    <div class="card"><b>Aforos de campo</b>${c.aforos.map((a, i) => `<div class="fila" style="margin-top:.4rem">${campo("Punto", `aforos.${i}.punto`, "t", a.punto)}${campo("Q (L/s)", `aforos.${i}.q_ls`, "n", a.q_ls)}${campo("Hora", `aforos.${i}.hora`, "h", a.hora)}${campo("Método", `aforos.${i}.metodo`, "t", a.metodo)}<button class="b g p" data-qa="${i}" style="align-self:flex-end">Quitar</button></div>`).join("")}<div><button class="b g p" id="c-afo" style="margin-top:.4rem">+ Agregar aforo</button></div></div>
+    <div class="card"><b>Notas rápidas con la hora</b><div class="fila" style="margin-top:.4rem"><label style="flex:3">Nota<input id="c-ev-txt" type="text" placeholder="p. ej. subió el caudal, lluvia, sonda movida"></label><button class="b" id="c-ev" style="align-self:flex-end">Anotar</button></div><div class="scroll"><table id="c-evt"></table></div></div>
+    <label>Observaciones generales<textarea data-r="observaciones">${esc(c.observaciones)}</textarea></label>
+    <details class="card"><summary><b>Datos de la jornada</b></summary><div class="fila" style="margin-top:.4rem">${campo("Nombre de la campaña", "nombre", "t", c.nombre, 'data-re="1"')}${campo("Fecha", "fecha", "f", c.fecha)}${campo("Responsable", "responsable", "t", c.responsable)}${campo("Cuadrilla", "cuadrilla", "t", c.cuadrilla)}${campo("Clima / condición del cauce", "clima", "t", c.clima)}</div></details>`;
+  if ($("c-iny")) $("c-iny").onclick = () => { prepararSonido(); const f = new Date(); I.hora = horaTxt(f); I.t0_iso = f.toISOString(); c.fecha = f.toISOString().slice(0, 10); E.estado = "en_curso"; E.t_fin_iso = null; E.avisos = {}; evento("Inyección del trazador" + (I.masa_kg ? " (" + I.masa_kg + " kg)" : "")); pedirPantalla(); pintarCampana(); };
+  if ($("c-parar")) $("c-parar").onclick = () => { if (!confirm("¿Terminar el ensayo? Se detienen el contador y los avisos.")) return; E.estado = "terminado"; E.t_fin_iso = new Date().toISOString(); evento("Ensayo terminado (duración " + hhmmss(transcurrido()) + ")"); $("aviso-ensayo").style.display = "none"; if (watchId === null) soltarPantalla(); pintarCampana(); };
+  if ($("c-anular")) $("c-anular").onclick = () => { if (!confirm("¿Anular la inyección? Se borra la hora y el contador vuelve a cero (las notas se conservan).")) return; I.hora = ""; I.t0_iso = null; E.estado = "preparando"; E.t_fin_iso = null; E.avisos = {}; evento("Inyección anulada"); $("aviso-ensayo").style.display = "none"; pintarCampana(); };
+  if ($("c-reabrir")) $("c-reabrir").onclick = () => { E.estado = "en_curso"; E.t_fin_iso = null; E.avisos = {}; evento("Ensayo reabierto"); pedirPantalla(); pintarCampana(); };
+  $("c-hora").addEventListener("change", () => { const h = $("c-hora").value; I.hora = h; I.t0_iso = h ? fechaHora(h).toISOString() : null; E.estado = h ? (E.estado === "terminado" ? "terminado" : "en_curso") : "preparando"; if (h) E.avisos = {}; guardar(); pintarCampana(); });
+  document.querySelectorAll("[data-chk]").forEach(i => i.onchange = () => { (E.check = E.check || {})[i.dataset.chk] = i.checked; guardar(); });
+  document.querySelectorAll("[data-ahora]").forEach(b => b.onclick = () => { const [id, k] = b.dataset.ahora.split("|"); (c.registros[id] = c.registros[id] || {})[k] = horaTxt(new Date()); evento({inicio: "Sonda encendida en ", pico: "Pico visto en ", fin: "Sonda apagada en "}[k] + punto(id).nombre); pintarCampana(); });
   $("c-afo").onclick = () => { c.aforos.push({punto: "", q_ls: null, hora: horaTxt(new Date()).slice(0, 5), metodo: ""}); guardar(); pintarCampana(); };
   document.querySelectorAll("[data-qa]").forEach(b => b.onclick = () => { c.aforos.splice(+b.dataset.qa, 1); guardar(); pintarCampana(); });
   $("c-ev").onclick = () => { const t = $("c-ev-txt").value.trim(); if (!t) return; evento(t); pintarCampana(); };
   $("c-evt").innerHTML = c.eventos.length ? "<tbody>" + c.eventos.slice().reverse().map(e => `<tr><td style="white-space:nowrap"><b>${e.hora}</b></td><td>${esc(e.texto)}</td></tr>`).join("") + "</tbody>" : "";
+  actualizarEnsayo();
 }
-setInterval(() => { const T = TAB === "camp" && $("c-crono") ? t0() : null; if (!T) { if ($("c-crono")) $("c-crono").textContent = "—"; return; } let s = Math.floor((Date.now() - T.getTime()) / 1000); const neg = s < 0; s = Math.abs(s); $("c-crono").textContent = (neg ? "−" : "") + pad(Math.floor(s / 3600)) + ":" + pad(Math.floor(s % 3600 / 60)) + ":" + pad(s % 60); $("c-crono-n").textContent = "tiempo desde la inyección"; }, 1000);
+function actualizarEnsayo() {                 // se llama cada segundo: solo refresca los textos que cambian, sin tocar lo que se está escribiendo
+  const s = transcurrido(), cr = $("c-crono"); if (cr) cr.textContent = s === null ? "—" : (s < 0 ? "−" : "") + hhmmss(s);
+  C().puntos.filter(p => p.rol === "monitoreo").forEach(p => { const e = $("st-" + p.id), k = $("card-" + p.id); if (!e) return; const r = estadoEstacion(p); if (e.innerHTML !== r.h) e.innerHTML = r.h; if (k) k.className = "card est " + r.cl; });
+}
+setInterval(() => { revisarAvisos(); if (TAB === "camp") actualizarEnsayo(); }, 1000);
 
 // ------------------------------------------------------------------ GUARDAR (exportar / importar)
 const slug = t => (t || "campana").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9]+/g, "_").slice(0, 40);
@@ -409,12 +457,12 @@ function datosExport() {
   return {formato: "ccp-bitacora-trazadores", version: 2, proyecto_id: null, campana_id: c.id, exportado: new Date().toISOString(), campana: {nombre: c.nombre, fecha: c.fecha, responsable: c.responsable, cuadrilla: c.cuadrilla, clima: c.clima},
     inyeccion: {masa_kg: c.inyeccion.masa_kg, pureza: c.inyeccion.pureza, agua_l: c.inyeccion.agua_l, hora: c.inyeccion.hora, t0_iso: c.inyeccion.t0_iso, sal: c.inyeccion.sal, punto: c.puntos[ii]?.nombre || ""},
     puntos: c.puntos.map((p, i) => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, precision_m: p.acc, cota: p.cota ?? null, cota_origen: p.cota_origen ?? null, alt_gps: p.alt_gps ?? null, alt_acc: p.alt_acc ?? null, notas: p.notas, abscisa_m: A[i], dist_anterior_m: i ? L[i - 1].d : null, origen_distancia: i ? L[i - 1].origen : null, dist_desde_inyeccion_m: ii >= 0 && A[i] !== null && A[ii] !== null ? A[i] - A[ii] : null, hidraulica: p.hid})),
-    tramos: c.tramos, parametros: c.params, programacion: c.programacion, registro_estaciones: Object.fromEntries(Object.entries(c.registros).map(([id, r]) => [punto(id)?.nombre || id, r])), aforos: c.aforos, eventos: c.eventos, observaciones: c.observaciones};
+    ensayo: {estado: ens().estado, t_fin_iso: ens().t_fin_iso, check: ens().check || {}}, tramos: c.tramos, parametros: c.params, programacion: c.programacion, registro_estaciones: Object.fromEntries(Object.entries(c.registros).map(([id, r]) => [punto(id)?.nombre || id, r])), aforos: c.aforos, eventos: c.eventos, observaciones: c.observaciones};
 }
 function blobJson() { const b = new Blob([JSON.stringify(datosExport(), null, 1)], {type: "application/json"}); C().exp = Date.now() + 1; guardar(true); pintarResp(); const u = $("ult-resp"); if (u) u.textContent = new Date(C().exp).toLocaleString("es-CO"); return b; }
 function csv() {
   const c = C(), d = datosExport(), q = v => '"' + String(v ?? "").replace(/"/g, '""') + '"', L = [];
-  L.push(["Campaña", c.nombre], ["Fecha", c.fecha], ["Responsable", c.responsable], ["Cuadrilla", c.cuadrilla], ["Condiciones", c.clima], [], ["Masa de sal (kg)", c.inyeccion.masa_kg], ["Pureza", c.inyeccion.pureza], ["Agua (L)", c.inyeccion.agua_l], ["Hora de inyección", c.inyeccion.hora], ["Sal", c.inyeccion.sal], [],
+  L.push(["Campaña", c.nombre], ["Fecha", c.fecha], ["Responsable", c.responsable], ["Cuadrilla", c.cuadrilla], ["Condiciones", c.clima], [], ["Masa de sal (kg)", c.inyeccion.masa_kg], ["Pureza", c.inyeccion.pureza], ["Agua (L)", c.inyeccion.agua_l], ["Hora de inyección", c.inyeccion.hora], ["Sal", c.inyeccion.sal], ["Estado del ensayo", ens().estado], ["Fin del ensayo", ens().t_fin_iso || ""], [],
     ["N°", "Punto", "Función", "Latitud", "Longitud", "Precisión (m)", "Abscisa (m)", "Dist. al anterior (m)", "Origen de la distancia", "Dist. desde inyección (m)", "Cota (m)", "Sonda", "Inicio real", "Fin real", "EC fondo", "Hora del pico", "Notas"]);
   d.puntos.forEach((p, i) => { const r = c.registros[p.id] || {}; L.push([i + 1, p.nombre, p.rol, p.lat, p.lon, p.precision_m, p.abscisa_m?.toFixed(1), p.dist_anterior_m?.toFixed(1), p.origen_distancia, p.dist_desde_inyeccion_m?.toFixed(1), p.cota, r.sonda, r.inicio, r.fin, r.ec_fondo, r.pico, p.notas || r.notas]); });
   L.push([], ["Aforo: punto", "Q (L/s)", "Hora", "Método"]); c.aforos.forEach(a => L.push([a.punto, a.q_ls, a.hora, a.metodo]));
@@ -453,7 +501,7 @@ function pintarGuardar() {
   const importar = texto => { try { const d = JSON.parse(texto); if (d.formato !== "ccp-bitacora-trazadores" || d.version !== 2) throw new Error("No es un archivo de esta app."); const k = nueva(d.campana?.nombre); Object.assign(k, {id: d.campana_id || k.id, nombre: d.campana?.nombre || k.nombre, fecha: d.campana?.fecha || k.fecha, responsable: d.campana?.responsable || "", cuadrilla: d.campana?.cuadrilla || "", clima: d.campana?.clima || "", observaciones: d.observaciones || "",
       puntos: (d.puntos || []).map(p => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, acc: p.precision_m, cota: p.cota ?? null, cota_origen: p.cota_origen ?? null, alt_gps: p.alt_gps ?? null, alt_acc: p.alt_acc ?? null, notas: p.notas || "", hid: p.hidraulica || {}})), tramos: d.tramos || [], params: {...PARAM0, ...(d.parametros || {})}, aforos: d.aforos || [], eventos: d.eventos || [], programacion: d.programacion || null,
       inyeccion: {...k.inyeccion, masa_kg: d.inyeccion?.masa_kg ?? null, pureza: d.inyeccion?.pureza ?? 0.95, agua_l: d.inyeccion?.agua_l ?? null, hora: d.inyeccion?.hora || "", t0_iso: d.inyeccion?.t0_iso || null, sal: d.inyeccion?.sal || ""}});
-      k.registros = {}; Object.entries(d.registro_estaciones || {}).forEach(([nom, r]) => { const p = k.puntos.find(x => x.nombre === nom); if (p) k.registros[p.id] = r; });
+      k.ensayo = d.ensayo ? {estado: d.ensayo.estado || "preparando", t_fin_iso: d.ensayo.t_fin_iso || null, check: d.ensayo.check || {}, avisos: {}} : undefined; k.registros = {}; Object.entries(d.registro_estaciones || {}).forEach(([nom, r]) => { const p = k.puntos.find(x => x.nombre === nom); if (p) k.registros[p.id] = r; });
       DB.campanas = DB.campanas.filter(x => x.id !== k.id); DB.campanas.push(k); k.exp = k.mod = Date.now() + 1; DB.activa = k.id; guardar(true); pintarCabecera(); pintarGuardar(); msgArchivo("✔ Campaña cargada: " + k.nombre + " (" + k.puntos.length + " puntos)."); } catch (e) { msgArchivo(e instanceof SyntaxError ? "El archivo no es un .json válido (¿está incompleto o es otro tipo de archivo?)." : "No se pudo cargar: " + e.message, true); } };
   const leer = f => new Promise((res, rej) => { try { f.text().then(res, () => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error("leer")); r.readAsText(f); }); } catch (e) { rej(e); } });
   $("x-file").onchange = async ev => { const f = ev.target.files[0]; if (!f) return; msgArchivo("Leyendo «" + f.name + "» (" + Math.max(1, Math.round(f.size / 1024)) + " KB)…");
