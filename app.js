@@ -145,25 +145,39 @@ document.addEventListener("change", ev => {
 const inp = (ruta, tipo, valor, extra = "") => `<input data-r="${ruta}" ${tipo === "n" ? 'data-t="n" type="number" step="any" inputmode="decimal"' : tipo === "h" ? 'type="time" step="1"' : tipo === "f" ? 'type="date"' : 'type="text"'} value="${valor === null || valor === undefined ? "" : (typeof valor === "number" ? Number(valor.toPrecision(7)) : esc(valor))}" ${extra}>`;
 const campo = (t, ruta, tipo, valor, extra) => `<label>${t}${inp(ruta, tipo, valor, extra)}</label>`;
 
-// ------------------------------------------------------------------ mapa esquemático (sin internet: puntos y recorridos en metros locales)
+// ------------------------------------------------------------------ mapa: proyección Web Mercator centrada; fondo de calle o satélite si hay internet (si no, solo puntos y recorridos)
+const FONDOS = {calle: {t: "Calle (OpenStreetMap)", url: (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`, atr: "© OpenStreetMap"}, satelite: {t: "Satélite (Esri)", url: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`, atr: "Imágenes © Esri"}};
+const mercator = (lat, lon) => [(lon + 180) / 360, 0.5 - Math.log(Math.tan(Math.PI / 4 + rad(lat) / 2)) / (2 * Math.PI)];
+function selectorFondo() { return `<label style="margin:.3rem 0">Fondo del mapa<select id="mapa-fondo"><option value="ninguno">Sin fondo (funciona sin internet)</option>${Object.entries(FONDOS).map(([k, f]) => `<option value="${k}"${DB.ajustes.fondo === k ? " selected" : ""}>${f.t}</option>`).join("")}</select></label>`; }
+document.addEventListener("change", ev => { if (ev.target.id === "mapa-fondo") { DB.ajustes.fondo = ev.target.value; guardar(); if (TAB === "pun") pintarPuntos(); else if (TAB === "rec") { const r = REC; pintarRecorrido(); } } });
 function mapaSVG() {
-  const c = C(), P = c.puntos.filter(p => isFinite(p.lat)), tr = c.tramos.filter(t => t.pts.length > 1);
-  if (!P.length && !(REC && REC.pts.length)) return '<p class="nota">El mapa aparece cuando haya puntos.</p>';
-  const todos = [...P.map(p => [p.lat, p.lon]), ...tr.flatMap(t => t.pts), ...(REC ? REC.pts : [])], la0 = todos.reduce((s, p) => s + p[0], 0) / todos.length, lo0 = todos.reduce((s, p) => s + p[1], 0) / todos.length;
-  const XY = p => [rad(p[1] - lo0) * Math.cos(rad(la0)) * R_T, rad(p[0] - la0) * R_T], pts = todos.map(XY);
-  let x0 = Math.min(...pts.map(p => p[0])), x1 = Math.max(...pts.map(p => p[0])), y0 = Math.min(...pts.map(p => p[1])), y1 = Math.max(...pts.map(p => p[1]));
-  const span = Math.max(x1 - x0, y1 - y0, 30), W = 600, Hh = 340, m = 30, esc_ = Math.min((W - 2 * m) / Math.max(x1 - x0, 30), (Hh - 2 * m) / Math.max(y1 - y0, 30));
-  const X = p => { const q = XY(p); return (m + (q[0] - x0) * esc_).toFixed(1); }, Y = p => { const q = XY(p); return (Hh - m - (q[1] - y0) * esc_).toFixed(1); };
-  const linea = ps => ps.map((p, i) => (i ? "L" : "M") + X(p) + "," + Y(p)).join("");
-  let s = `<svg class="mapa" viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Mapa esquemático">`;
-  tr.forEach(t => { s += `<path d="${linea(t.pts)}" fill="none" stroke="#1F3864" stroke-width="2.5" opacity=".8"/>`; });
-  if (REC && REC.pts.length > 1) s += `<path d="${linea(REC.pts)}" fill="none" stroke="#c0392b" stroke-width="3"/>`;
+  const c = C(), P = c.puntos.filter(p => isFinite(p.lat) && isFinite(p.lon)), tr = c.tramos.filter(t => t.pts.length > 1);
+  if (!P.length && !(REC && REC.pts.length) && !ULT) return '<p class="nota">El mapa aparece cuando haya puntos.</p>';
+  const W = 600, H = 400, pad = 46, fondo = FONDOS[DB.ajustes.fondo];
+  const todos = [...P.map(p => [p.lat, p.lon]), ...tr.flatMap(t => t.pts), ...(REC ? REC.pts : []), ...(ULT ? [[ULT.lat, ULT.lon]] : [])].map(p => mercator(p[0], p[1]));
+  const latC = todos.length ? P.length ? P[0].lat : ULT.lat : 0, mPorU = 40075016.686 * Math.cos(rad(latC));           // metros por unidad de mundo
+  let x0 = Math.min(...todos.map(p => p[0])), x1 = Math.max(...todos.map(p => p[0])), y0 = Math.min(...todos.map(p => p[1])), y1 = Math.max(...todos.map(p => p[1]));
+  const minU = 60 / mPorU, dx = Math.max(x1 - x0, minU), dy = Math.max(y1 - y0, minU), sc = Math.min((W - 2 * pad) / dx, (H - 2 * pad) / dy), cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;   // px por unidad de mundo
+  const X = u => W / 2 + (u - cx) * sc, Y = u => H / 2 + (u - cy) * sc, pt = (lat, lon) => { const m = mercator(lat, lon); return [X(m[0]), Y(m[1])]; };
+  let s = `<svg class="mapa" viewBox="0 0 ${W} ${H}" role="img" aria-label="Mapa de los puntos y el recorrido"><rect width="${W}" height="${H}" fill="#eef1f7"/>`;
+  if (fondo) {                                                                                                         // teselas que cubren la vista
+    let z = Math.max(0, Math.min(19, Math.round(Math.log2(sc / 256)))), n = 2 ** z;
+    const tx0 = Math.floor((cx - W / 2 / sc) * n), tx1 = Math.floor((cx + W / 2 / sc) * n), ty0 = Math.max(0, Math.floor((cy - H / 2 / sc) * n)), ty1 = Math.min(n - 1, Math.floor((cy + H / 2 / sc) * n));
+    if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) <= 30) for (let tx = tx0; tx <= tx1; tx++) for (let ty = ty0; ty <= ty1; ty++) s += `<image href="${fondo.url(z, ((tx % n) + n) % n, ty)}" x="${X(tx / n).toFixed(1)}" y="${Y(ty / n).toFixed(1)}" width="${(sc / n + 0.6).toFixed(1)}" height="${(sc / n + 0.6).toFixed(1)}" preserveAspectRatio="none"/>`;
+  }
+  const lin = ps => ps.map((p, i) => { const q = pt(p[0], p[1]); return (i ? "L" : "M") + q[0].toFixed(1) + "," + q[1].toFixed(1); }).join("");
+  for (let i = 1; i < c.puntos.length; i++) { const a = c.puntos[i - 1], b = c.puntos[i]; if (!tramoEntre(a.id, b.id) && isFinite(a.lat) && isFinite(b.lat)) s += `<path d="${lin([[a.lat, a.lon], [b.lat, b.lon]])}" fill="none" stroke="#fff" stroke-width="5" opacity=".8"/><path d="${lin([[a.lat, a.lon], [b.lat, b.lon]])}" fill="none" stroke="#5b6577" stroke-width="2.5" stroke-dasharray="6 5"/>`; }
+  tr.forEach(t => { s += `<path d="${lin(t.pts)}" fill="none" stroke="#fff" stroke-width="6" opacity=".85" stroke-linejoin="round"/><path d="${lin(t.pts)}" fill="none" stroke="#1F3864" stroke-width="3" stroke-linejoin="round"/>`; });
+  if (REC && REC.pts.length > 1) s += `<path d="${lin(REC.pts)}" fill="none" stroke="#fff" stroke-width="7" stroke-linejoin="round"/><path d="${lin(REC.pts)}" fill="none" stroke="#c0392b" stroke-width="3.5" stroke-linejoin="round"/>`;
   const col = {inyeccion: "#c0392b", monitoreo: "#1F3864", vertimiento: "#8e44ad", afluente: "#2e8b57", otro: "#777"};
-  P.forEach((p, i) => { s += `<circle cx="${X([p.lat, p.lon])}" cy="${Y([p.lat, p.lon])}" r="6" fill="${col[p.rol] || "#777"}" stroke="#fff" stroke-width="2"/><text x="${+X([p.lat, p.lon]) + 9}" y="${+Y([p.lat, p.lon]) + 4}">${i + 1}. ${esc(p.nombre)}</text>`; });
-  if (ULT) s += `<circle cx="${X([ULT.lat, ULT.lon])}" cy="${Y([ULT.lat, ULT.lon])}" r="5" fill="#2b8cff" stroke="#fff" stroke-width="2"/>`;
-  const barra = [10, 20, 50, 100, 200, 500, 1000].find(v => v * esc_ > 60) || 1000;
-  s += `<line x1="${m}" y1="${Hh - 10}" x2="${m + barra * esc_}" y2="${Hh - 10}" stroke="#444" stroke-width="2"/><text x="${m}" y="${Hh - 14}">${barra} m</text><text x="${W - 30}" y="16">N ↑</text></svg>`;
-  return s;
+  P.forEach(p => { const q = pt(p.lat, p.lon), i = c.puntos.indexOf(p) + 1, der = q[0] < W - 150, tx = der ? q[0] + 11 : q[0] - 11;
+    s += `<circle cx="${q[0].toFixed(1)}" cy="${q[1].toFixed(1)}" r="7" fill="${col[p.rol] || "#777"}" stroke="#fff" stroke-width="2.5"/><text x="${tx.toFixed(1)}" y="${(q[1] - 9).toFixed(1)}" text-anchor="${der ? "start" : "end"}" style="font-size:12px;font-weight:600;paint-order:stroke;stroke:#fff;stroke-width:3.5px;stroke-linejoin:round;fill:#1d2433">${i}. ${esc(p.nombre)}</text>`; });
+  if (ULT) { const q = pt(ULT.lat, ULT.lon), r = Math.max(6, ULT.acc * sc / mPorU); s += `<circle cx="${q[0].toFixed(1)}" cy="${q[1].toFixed(1)}" r="${Math.min(r, 60).toFixed(1)}" fill="#2b8cff" opacity=".15"/><circle cx="${q[0].toFixed(1)}" cy="${q[1].toFixed(1)}" r="6" fill="#2b8cff" stroke="#fff" stroke-width="2.5"/>`; }
+  const mPx = mPorU / sc, barra = [5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000].find(v => v / mPx >= 70) || 5000, bw = barra / mPx;      // barra de escala
+  s += `<rect x="8" y="${H - 34}" width="${bw + 16}" height="26" rx="4" fill="#fff" opacity=".85"/><line x1="16" y1="${H - 14}" x2="${16 + bw}" y2="${H - 14}" stroke="#1d2433" stroke-width="2.5"/><text x="16" y="${H - 19}" style="font-size:11px;fill:#1d2433">${barra >= 1000 ? barra / 1000 + " km" : barra + " m"}</text>`;
+  s += `<g><rect x="${W - 34}" y="8" width="26" height="26" rx="4" fill="#fff" opacity=".85"/><text x="${W - 21}" y="28" text-anchor="middle" style="font-size:16px;font-weight:700;fill:#1d2433">N</text></g>`;
+  if (fondo) s += `<text x="${W - 6}" y="${H - 6}" text-anchor="end" style="font-size:10px;paint-order:stroke;stroke:#fff;stroke-width:3px;fill:#333">${fondo.atr}</text>`;
+  return s + "</svg>";
 }
 
 // ------------------------------------------------------------------ PUNTOS
@@ -179,7 +193,7 @@ function pintarPuntos() {
     <div class="card"><div class="fila"><label>Nombre del nuevo punto<input id="pt-nombre" type="text" placeholder="p. ej. Inyección, Estación 1…"></label><label>Función<select id="pt-rol">${ROLES.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select></label></div>
     <div style="display:flex;gap:.5rem;margin-top:.5rem;flex-wrap:wrap"><button class="b" id="pt-fijar" style="flex:2">📍 Marcar punto aquí (GPS)</button><button class="b g" id="pt-manual" style="flex:1">Escribir coordenadas</button></div>
     <p class="nota">El GPS promedia ${DB.ajustes.seg_promedio} s para mejorar la precisión. Quédese quieto en el punto.</p></div>
-    ${c.puntos.length ? "<h2>Mapa</h2>" + mapaSVG() : ""}
+    ${c.puntos.length ? "<h2>Mapa</h2>" + selectorFondo() + mapaSVG() : ""}
     <h2>Puntos (${c.puntos.length})</h2>${filas || '<p class="nota">Aún no hay puntos.</p>'}
     <div style="display:flex;gap:.5rem;flex-wrap:wrap"><button class="b g p" id="pt-inv">⇅ Invertir el orden</button></div>
     <details class="card"><summary><b>Ajustes del GPS</b></summary><div class="fila" style="margin-top:.4rem"><label>Precisión máxima aceptada (m)<input id="aj-acc" type="number" value="${DB.ajustes.acc_max}"></label><label>Paso mínimo entre lecturas (m)<input id="aj-paso" type="number" value="${DB.ajustes.paso_min}"></label><label>Segundos de promedio por punto<input id="aj-seg" type="number" value="${DB.ajustes.seg_promedio}"></label></div></details>`;
@@ -207,7 +221,7 @@ function pintarRecorrido() {
     `<p class="nota">Camine por la orilla <b>siguiendo el cauce</b> de un punto al siguiente con el GPS grabando: la distancia del tramo es la longitud de lo caminado. Mantenga la pantalla encendida (la app la protege del apagado mientras graba) y la app abierta.</p>
     <div class="card"><div class="fila"><label>Empezar en el punto${c.puntos.length ? sel("rec-ini") : "<select disabled><option>(marque un punto primero)</option></select>"}</label></div>
     <button class="b" id="rec-go" style="width:100%;margin-top:.5rem" ${c.puntos.length ? "" : "disabled"}>● Iniciar recorrido</button></div>
-    <h2>Mapa</h2>${mapaSVG()}<h2>Distancias entre puntos</h2>${tabla}
+    <h2>Mapa</h2>${selectorFondo()}${mapaSVG()}<h2>Distancias entre puntos</h2>${tabla}
     <p class="nota">La distancia por GPS suele sobreestimar un poco el camino en tramos cortos (ruido de ±3 a ±10 m). Para tramos muy cortos mida con cinta o escriba la distancia en la última columna; esa prevalece.</p>`;
   if ($("rec-go")) $("rec-go").onclick = () => { const p = punto($("rec-ini").value); if (!iniciarGPS()) return; REC = {de: p.id, pts: [[p.lat, p.lon, Date.now(), 0]], t0: Date.now()}; pintarRecorrido(); };
   if ($("rec-marca")) $("rec-marca").onclick = marcarEnRecorrido;
