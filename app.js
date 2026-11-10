@@ -54,7 +54,7 @@ const LS = "ccp-campo-v1";
 let DB = (() => { try { const t = localStorage.getItem(LS); if (t) return JSON.parse(t); } catch (e) {} return {campanas: [], activa: null, ajustes: {...AJ0}}; })();
 DB.ajustes = {...AJ0, ...(DB.ajustes || {})};
 let AVISO_GUARDADO = false;
-function guardar() { try { localStorage.setItem(LS, JSON.stringify(DB)); AVISO_GUARDADO = false; } catch (e) { if (!AVISO_GUARDADO) { AVISO_GUARDADO = true; alert("No se pudo guardar en el teléfono (modo privado o sin espacio). Exporte el archivo ahora desde «Guardar»."); } } }
+function guardar(sinMod) { if (!sinMod) { const c0 = DB.campanas.find(x => x.id === DB.activa); if (c0) c0.mod = Date.now(); } try { localStorage.setItem(LS, JSON.stringify(DB)); AVISO_GUARDADO = false; } catch (e) { if (!AVISO_GUARDADO) { AVISO_GUARDADO = true; alert("No se pudo guardar en el teléfono (modo privado o sin espacio). Exporte el archivo ahora desde «Guardar»."); } } }
 function nueva(nombre) {
   const f = new Date();
   return {id: "c" + f.getTime().toString(36), nombre: nombre || "Campaña " + f.toISOString().slice(0, 10), fecha: f.toISOString().slice(0, 10), responsable: "", cuadrilla: "", clima: "", observaciones: "",
@@ -125,13 +125,21 @@ function fijarPunto(seg) {      // promedia los fixes de unos segundos (media po
   });
 }
 
+// ------------------------------------------------------------------ aviso de respaldo: lo escrito vive solo en este navegador; el archivo .json es la copia real
+function pintarResp() {
+  const e = $("resp"); if (!e) return; const c = C(), hay = c.puntos.length || c.eventos.length || c.aforos.length || c.inyeccion.masa_kg, sin = hay && c.mod && (!c.exp || c.mod > c.exp);
+  e.style.display = sin ? "flex" : "none";
+  if (sin) e.innerHTML = `<span>⚠ Cambios sin respaldar${c.exp ? " desde las " + new Date(c.exp).toLocaleTimeString("es-CO", {hour: "2-digit", minute: "2-digit"}) : " (nunca se ha respaldado)"}. Si borra la app o los datos del navegador se pierden.</span><button class="b p" id="resp-ir">Respaldar</button>`;
+  if ($("resp-ir")) $("resp-ir").onclick = () => { TAB = "exp"; mostrar(); };
+}
+setInterval(pintarResp, 15000);
 // ------------------------------------------------------------------ pestañas
 let TAB = "pun";
 document.querySelectorAll("#nav button").forEach(b => b.onclick = () => { TAB = b.dataset.t; mostrar(); });
 function mostrar() {
   document.querySelectorAll("#nav button").forEach(x => x.classList.toggle("on", x.dataset.t === TAB));
   document.querySelectorAll("main section").forEach(s => s.classList.toggle("on", s.id === "t-" + TAB));
-  ({pun: pintarPuntos, rec: pintarRecorrido, prog: pintarProg, camp: pintarCampana, exp: pintarGuardar})[TAB]();
+  ({pun: pintarPuntos, rec: pintarRecorrido, prog: pintarProg, camp: pintarCampana, exp: pintarGuardar})[TAB](); pintarResp();
 }
 function pintarCabecera() {
   $("sel-camp").innerHTML = DB.campanas.map(c => `<option value="${c.id}"${c.id === DB.activa ? " selected" : ""}>${esc(c.nombre)}</option>`).join("") + '<option value="__nueva">+ Nueva campaña…</option>';
@@ -403,7 +411,7 @@ function datosExport() {
     puntos: c.puntos.map((p, i) => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, precision_m: p.acc, notas: p.notas, abscisa_m: A[i], dist_anterior_m: i ? L[i - 1].d : null, origen_distancia: i ? L[i - 1].origen : null, dist_desde_inyeccion_m: ii >= 0 && A[i] !== null && A[ii] !== null ? A[i] - A[ii] : null, hidraulica: p.hid})),
     tramos: c.tramos, parametros: c.params, programacion: c.programacion, registro_estaciones: Object.fromEntries(Object.entries(c.registros).map(([id, r]) => [punto(id)?.nombre || id, r])), aforos: c.aforos, eventos: c.eventos, observaciones: c.observaciones};
 }
-const blobJson = () => new Blob([JSON.stringify(datosExport(), null, 1)], {type: "application/json"});
+function blobJson() { const b = new Blob([JSON.stringify(datosExport(), null, 1)], {type: "application/json"}); C().exp = Date.now() + 1; guardar(true); pintarResp(); const u = $("ult-resp"); if (u) u.textContent = new Date(C().exp).toLocaleString("es-CO"); return b; }
 function csv() {
   const c = C(), d = datosExport(), q = v => '"' + String(v ?? "").replace(/"/g, '""') + '"', L = [];
   L.push(["Campaña", c.nombre], ["Fecha", c.fecha], ["Responsable", c.responsable], ["Cuadrilla", c.cuadrilla], ["Condiciones", c.clima], [], ["Masa de sal (kg)", c.inyeccion.masa_kg], ["Pureza", c.inyeccion.pureza], ["Agua (L)", c.inyeccion.agua_l], ["Hora de inyección", c.inyeccion.hora], ["Sal", c.inyeccion.sal], [],
@@ -428,7 +436,8 @@ let PROMPT_INSTALAR = null;
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); PROMPT_INSTALAR = e; if (TAB === "exp") pintarGuardar(); });
 function pintarGuardar() {
   const c = C(), ios = /iphone|ipad/i.test(navigator.userAgent), instalada = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
-  $("t-exp").innerHTML = `<h2>Sacar los datos del teléfono</h2><p class="nota">Campaña: <b>${esc(c.nombre)}</b> · ${c.puntos.length} puntos · ${c.tramos.length} tramos grabados.</p>
+  $("t-exp").innerHTML = `<h2>Sacar los datos del teléfono</h2><div class="card" style="border-color:var(--am)"><b>¿Dónde queda lo que escribo?</b><p class="nota">Se guarda solo, automáticamente, <b>dentro de este navegador del teléfono</b>. Si borra la app, la desinstala o limpia los datos del navegador, <b>se pierde</b>. La copia segura es el archivo <b>.json</b>: descárguelo o compártalo (WhatsApp, correo, Drive) al terminar cada tramo del trabajo y siempre antes de borrar o reinstalar la app. Almacenamiento protegido por el navegador: <b>${DB.persistente ? "sí" : "no confirmado"}</b>.</p></div>
+    <p class="nota">Campaña: <b>${esc(c.nombre)}</b> · ${c.puntos.length} puntos · ${c.tramos.length} tramos grabados · último respaldo: <b id="ult-resp">${c.exp ? new Date(c.exp).toLocaleString("es-CO") : "ninguno"}</b>.</p>
     <div class="card"><button class="b" id="x-comp" style="width:100%;margin:.2rem 0">Compartir / enviar (WhatsApp, correo, Drive…)</button>
     <button class="b g" id="x-json" style="width:100%;margin:.2rem 0">Descargar todo (.json) — para la plataforma</button><button class="b g" id="x-kml" style="width:100%;margin:.2rem 0">Puntos y recorrido (.kml) — para Google Earth y el paso 1</button>
     <button class="b g" id="x-gpx" style="width:100%;margin:.2rem 0">Puntos y recorrido (.gpx)</button><button class="b g" id="x-csv" style="width:100%;margin:.2rem 0">Resumen (.csv) — para Excel</button><p class="nota" id="x-msg"></p></div>
@@ -443,7 +452,7 @@ function pintarGuardar() {
       puntos: (d.puntos || []).map(p => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, acc: p.precision_m, notas: p.notas || "", hid: p.hidraulica || {}})), tramos: d.tramos || [], params: {...PARAM0, ...(d.parametros || {})}, aforos: d.aforos || [], eventos: d.eventos || [], programacion: d.programacion || null,
       inyeccion: {...k.inyeccion, masa_kg: d.inyeccion?.masa_kg ?? null, pureza: d.inyeccion?.pureza ?? 0.95, agua_l: d.inyeccion?.agua_l ?? null, hora: d.inyeccion?.hora || "", t0_iso: d.inyeccion?.t0_iso || null, sal: d.inyeccion?.sal || ""}});
       k.registros = {}; Object.entries(d.registro_estaciones || {}).forEach(([nom, r]) => { const p = k.puntos.find(x => x.nombre === nom); if (p) k.registros[p.id] = r; });
-      DB.campanas = DB.campanas.filter(x => x.id !== k.id); DB.campanas.push(k); DB.activa = k.id; guardar(); pintarCabecera(); pintarGuardar(); $("x-msg").textContent = "Campaña cargada."; } catch (e) { $("x-msg").textContent = "No se pudo leer: " + e.message; } };
+      DB.campanas = DB.campanas.filter(x => x.id !== k.id); DB.campanas.push(k); k.exp = k.mod = Date.now() + 1; DB.activa = k.id; guardar(true); pintarCabecera(); pintarGuardar(); $("x-msg").textContent = "Campaña cargada."; } catch (e) { $("x-msg").textContent = "No se pudo leer: " + e.message; } };
   document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => { const k = DB.campanas.find(x => x.id === b.dataset.del); if (confirm("¿Borrar «" + k.nombre + "» de este teléfono? Si no la descargó, se pierde.")) { DB.campanas = DB.campanas.filter(x => x !== k); if (DB.activa === k.id) DB.activa = DB.campanas[0].id; guardar(); pintarCabecera(); pintarGuardar(); } });
   if ($("x-inst")) $("x-inst").onclick = async () => { PROMPT_INSTALAR.prompt(); await PROMPT_INSTALAR.userChoice; PROMPT_INSTALAR = null; pintarGuardar(); };
 }
@@ -451,4 +460,5 @@ function pintarGuardar() {
 // ------------------------------------------------------------------ arranque
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 window.addEventListener("beforeunload", ev => { if (REC) { ev.preventDefault(); ev.returnValue = ""; } });
+try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().then(ok => { DB.persistente = ok; guardar(true); }); } catch (e) {}
 pintarCabecera(); pintarGPS(); mostrar();
