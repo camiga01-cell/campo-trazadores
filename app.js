@@ -7,7 +7,7 @@ const pad = n => String(n).padStart(2, "0");
 const horaTxt = f => pad(f.getHours()) + ":" + pad(f.getMinutes()) + ":" + pad(f.getSeconds());
 const ROLES = [["inyeccion", "Inyección del trazador"], ["monitoreo", "Estación de monitoreo"], ["vertimiento", "Vertimiento"], ["afluente", "Afluente"], ["otro", "Otro"]];
 const PARAM0 = {tipo_inyeccion: 1, mult_pico: 10, dec_min: 30, k: 0.5, pureza: 0.95, f_seguridad: 1.5, solubilidad_g_l: 250, alpha_t: 0.6};
-const AJ0 = {acc_max: 20, paso_min: 3, seg_promedio: 10};
+const AJ0 = {acc_max: 20, paso_min: 3, seg_promedio: 10, fondo: "calle"};
 
 // ------------------------------------------------------------------ geometría
 const R_T = 6371008.8, rad = g => g * Math.PI / 180;
@@ -146,9 +146,12 @@ const inp = (ruta, tipo, valor, extra = "") => `<input data-r="${ruta}" ${tipo =
 const campo = (t, ruta, tipo, valor, extra) => `<label>${t}${inp(ruta, tipo, valor, extra)}</label>`;
 
 // ------------------------------------------------------------------ mapa: proyección Web Mercator centrada; fondo de calle o satélite si hay internet (si no, solo puntos y recorridos)
-const FONDOS = {calle: {t: "Calle (OpenStreetMap)", url: (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`, atr: "© OpenStreetMap"}, satelite: {t: "Satélite (Esri)", url: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`, atr: "Imágenes © Esri"}};
+const FONDOS = {calle: {t: "Calle (OpenStreetMap)", url: (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`, atr: "© OpenStreetMap", zmax: 19}, satelite: {t: "Satélite (Esri)", url: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`, atr: "Imágenes © Esri", zmax: 17}};
 const mercator = (lat, lon) => [(lon + 180) / 360, 0.5 - Math.log(Math.tan(Math.PI / 4 + rad(lat) / 2)) / (2 * Math.PI)];
-function selectorFondo() { return `<label style="margin:.3rem 0">Fondo del mapa<select id="mapa-fondo"><option value="ninguno">Sin fondo (funciona sin internet)</option>${Object.entries(FONDOS).map(([k, f]) => `<option value="${k}"${DB.ajustes.fondo === k ? " selected" : ""}>${f.t}</option>`).join("")}</select></label>`; }
+let FALLAS = 0;
+function fondoFalla() { FALLAS++; const n = $("mapa-nota"); if (n) n.textContent = "⚠ No cargó el fondo del mapa: revise la conexión a internet, o cambie a «Sin fondo». (Sin internet solo se ven los puntos y recorridos.)"; }
+function fondoOk() { const n = $("mapa-nota"); if (n && FALLAS) { FALLAS = 0; n.textContent = ""; } }
+function selectorFondo() { return `<label style="margin:.3rem 0">Fondo del mapa<select id="mapa-fondo"><option value="ninguno">Sin fondo (funciona sin internet)</option>${Object.entries(FONDOS).map(([k, f]) => `<option value="${k}"${DB.ajustes.fondo === k ? " selected" : ""}>${f.t}</option>`).join("")}</select></label><div class="nota" id="mapa-nota">${DB.ajustes.fondo !== "ninguno" && navigator.onLine === false ? "⚠ Sin internet: no se ve el fondo, solo los puntos y recorridos." : ""}</div>`; }
 document.addEventListener("change", ev => { if (ev.target.id === "mapa-fondo") { DB.ajustes.fondo = ev.target.value; guardar(); if (TAB === "pun") pintarPuntos(); else if (TAB === "rec") { const r = REC; pintarRecorrido(); } } });
 function mapaSVG() {
   const c = C(), P = c.puntos.filter(p => isFinite(p.lat) && isFinite(p.lon)), tr = c.tramos.filter(t => t.pts.length > 1);
@@ -161,9 +164,9 @@ function mapaSVG() {
   const X = u => W / 2 + (u - cx) * sc, Y = u => H / 2 + (u - cy) * sc, pt = (lat, lon) => { const m = mercator(lat, lon); return [X(m[0]), Y(m[1])]; };
   let s = `<svg class="mapa" viewBox="0 0 ${W} ${H}" role="img" aria-label="Mapa de los puntos y el recorrido"><rect width="${W}" height="${H}" fill="#eef1f7"/>`;
   if (fondo) {                                                                                                         // teselas que cubren la vista
-    let z = Math.max(0, Math.min(19, Math.round(Math.log2(sc / 256)))), n = 2 ** z;
+    let z = Math.max(0, Math.min(fondo.zmax, Math.round(Math.log2(sc / 256)))), n = 2 ** z;
     const tx0 = Math.floor((cx - W / 2 / sc) * n), tx1 = Math.floor((cx + W / 2 / sc) * n), ty0 = Math.max(0, Math.floor((cy - H / 2 / sc) * n)), ty1 = Math.min(n - 1, Math.floor((cy + H / 2 / sc) * n));
-    if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) <= 30) for (let tx = tx0; tx <= tx1; tx++) for (let ty = ty0; ty <= ty1; ty++) s += `<image href="${fondo.url(z, ((tx % n) + n) % n, ty)}" x="${X(tx / n).toFixed(1)}" y="${Y(ty / n).toFixed(1)}" width="${(sc / n + 0.6).toFixed(1)}" height="${(sc / n + 0.6).toFixed(1)}" preserveAspectRatio="none"/>`;
+    if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) <= 30) for (let tx = tx0; tx <= tx1; tx++) for (let ty = ty0; ty <= ty1; ty++) s += `<image href="${fondo.url(z, ((tx % n) + n) % n, ty)}" x="${X(tx / n).toFixed(1)}" y="${Y(ty / n).toFixed(1)}" width="${(sc / n + 0.6).toFixed(1)}" height="${(sc / n + 0.6).toFixed(1)}" preserveAspectRatio="none" onerror="fondoFalla()" onload="fondoOk()"/>`;
   }
   const lin = ps => ps.map((p, i) => { const q = pt(p[0], p[1]); return (i ? "L" : "M") + q[0].toFixed(1) + "," + q[1].toFixed(1); }).join("");
   for (let i = 1; i < c.puntos.length; i++) { const a = c.puntos[i - 1], b = c.puntos[i]; if (!tramoEntre(a.id, b.id) && isFinite(a.lat) && isFinite(b.lat)) s += `<path d="${lin([[a.lat, a.lon], [b.lat, b.lon]])}" fill="none" stroke="#fff" stroke-width="5" opacity=".8"/><path d="${lin([[a.lat, a.lon], [b.lat, b.lon]])}" fill="none" stroke="#5b6577" stroke-width="2.5" stroke-dasharray="6 5"/>`; }
