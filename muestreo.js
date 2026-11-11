@@ -16,11 +16,6 @@ const AYUDA_M = {
   sombra: ["Sombra sobre el cauce", "Porcentaje del agua del tramo que NO recibe sol directo por árboles, vegetación de orilla o paredes del cauce: 0 = a pleno sol, 100 = todo en sombra. Estímelo mirando el tramo (no solo el punto) a esa hora; cambia durante el día.", "Shade (por hora)"],
   rad: ["Radiación solar", "En W/m² con piranómetro, a esa hora. Si no tiene el equipo déjela vacía: el modelo normalmente la calcula con la latitud, la fecha y las nubes.", "Solar (opcional)"],
   lluvia24: ["Lluvia previa", "Milímetros del pluviómetro, o descripción: sin lluvia / llovizna / aguacero, y a qué hora fue. Explica cambios de caudal y de carga en el río.", "Condición hidroclimatológica que pide la CAR"],
-  aspecto: ["Aspecto del agua", "Color y claridad (transparente, turbia, café, verdosa) y si hay espuma, aceites, basura o algas.", "Observación cualitativa"],
-  olor: ["Olor", "Ninguno, a tierra o vegetación, a huevo podrido (séptico), a jabón o a químico.", "Observación cualitativa"],
-  sedimento: ["Sedimento / fondo", "Material del fondo y de las orillas: roca, grava, arena, limo o lodo, vegetación sumergida; y si hay lodo negro acumulado.", "Observación cualitativa"],
-  toma: ["Dónde se toma en la sección", "Margen izquierda, centro o derecha (mirando aguas abajo) y profundidad (p. ej. a 0,3 m o a media profundidad). En la zona de mezcla confirme que el vertimiento ya se mezcló de lado a lado.", "Formato de campo"],
-  tipo: ["Tipo de muestra", "Puntual: un solo instante y lugar. Integrada: varias verticales de la sección mezcladas. Compuesta: varias tomas a lo largo del tiempo (la usa el vertimiento).", "Formato de campo"],
   t_viaje: ["Tiempo de viaje", "Minutos que tarda el agua desde el sitio anterior hasta este: sale del ensayo de trazadores (entre el primer arribo y el tiempo medio de viaje) o del modelo hidráulico.", "Seguimiento de la misma masa de agua"],
   cota: ["Cota", "Altura del punto sobre el nivel del mar (m), de topografía o nivelación. La altitud del GPS no sirve para pendientes de tramos cortos.", "Pendiente del tramo"]
 };
@@ -52,8 +47,8 @@ function mue() {
 function sitioM(k) {
   const M = mue(); if (M.sitios[k]) { const E = M.sitios[k]; if (!E.meteo) E.meteo = []; return E; }
   const S = SITIOS_M.find(s => s.k === k);
-  return M.sitios[k] = {punto_id: null, toma: "", tipo: "puntual", hora_ini: "", hora_fin: "", t_viaje_min: null,
-    meteo: [], lluvia24: "", aspecto: "", olor: "", sedimento: "", notas: ""};
+  return M.sitios[k] = {punto_id: null, hora_ini: "", hora_fin: "", t_viaje_min: null,
+    meteo: [], lluvia24: "", notas: ""};
 }
 const horaDe = (h, c = C()) => { if (!h) return null; const f = new Date((c.fecha || new Date().toISOString().slice(0, 10)) + "T00:00:00"), [a, b, s] = h.split(":").map(Number); f.setHours(a, b, s || 0, 0); return f; };
 function sugeridaM(k) {                     // hora para seguir la misma masa de agua: hora de toma en el sitio anterior + tiempo de viaje hasta este
@@ -90,7 +85,6 @@ function pintarMuestreo() {
     return `<details class="card est ${R.listo ? "ya" : ""}" data-sitio="${s.k}" ${ABIERTOS_M.has(s.k) ? "open" : ""}><summary><b>${s.n}</b> ${S.hora_ini ? `<span class="badge">${S.hora_ini.slice(0, 5)}</span>` : ""} ${R.listo ? "✔" : ""}</summary>
       <p class="nota">${s.d}</p>
       ${posicionHtml(s, S)}
-      <div class="fila">${campo("Dónde en la sección (margen, centro, profundidad)", r + ".toma", "t", S.toma, AY("toma"))}<label>Tipo de muestra<select data-r="${r}.tipo" ${AY("tipo")}><option${S.tipo === "puntual" ? " selected" : ""}>puntual</option><option${S.tipo === "integrada" ? " selected" : ""}>integrada</option><option${S.tipo === "compuesta" ? " selected" : ""}>compuesta</option></select></label></div>
       <h2 style="font-size:.95rem">Hora de la toma</h2>
       ${s.k !== "arriba" ? `<div class="fila">${campo("Tiempo de viaje desde el sitio anterior (min)", r + ".t_viaje_min", "n", S.t_viaje_min, AY("t_viaje", true))}</div><div class="nota" id="sug-${s.k}">${sug ? "" : "Escriba el tiempo de viaje (del ensayo de trazadores o del modelo) para ver la hora sugerida."}</div>` : '<p class="nota">Este sitio marca el arranque: las horas de los siguientes se calculan desde su hora de inicio.</p>'}
       <div class="fila">${campo("Inicio de la toma", r + ".hora_ini", "h", S.hora_ini, 'data-re="1"')}${campo("Fin de la toma", r + ".hora_fin", "h", S.hora_fin)}</div>
@@ -102,7 +96,7 @@ function pintarMuestreo() {
       <div style="margin:.3rem 0"><button class="b g p" data-meadd="${s.k}">+ Lectura ahora</button></div>
       ${MA.length ? `<div class="adv">⚠ ${MA.join(" · ")}</div>` : ""}
       <p class="nota">La temperatura de rocío la calcula la app con la temperatura y la humedad (fórmula de Magnus). El viento se anota a la altura a la que se midió; el modelo lo pide a 7 m y se ajusta al armar el modelo (por confirmar).</p>
-      <div class="fila">${campo("Lluvia en las últimas 24 h", r + ".lluvia24", "t", S.lluvia24, AY("lluvia24"))}${campo("Aspecto / color del agua", r + ".aspecto", "t", S.aspecto, AY("aspecto"))}${campo("Olor", r + ".olor", "t", S.olor, AY("olor"))}${campo("Sedimento / fondo", r + ".sedimento", "t", S.sedimento, AY("sedimento"))}</div>
+      <div class="fila">${campo("Lluvia en las últimas 24 h", r + ".lluvia24", "t", S.lluvia24, AY("lluvia24"))}</div>
       ${fotosHtml("muestreo", "m:" + s.k, ["Sitio de muestreo", "Toma de la muestra", "Lectura de la sonda", "Otra"])}
       ${campo("Notas de este sitio", r + ".notas", "t", S.notas)}</details>`;
   }).join("");
@@ -152,7 +146,7 @@ function combinarMuestreo(a, b) {
   ["equipo", "serie", "calib"].forEach(k => { if (vacio(M[k]) && !vacio(b[k])) { M[k] = b[k]; n++; } });
   Object.entries(b.sitios || {}).forEach(([k, sb]) => {
     const sa = M.sitios[k]; if (!sa) { M.sitios[k] = sb; n++; return; }
-    ["punto_id", "toma", "hora_ini", "hora_fin", "t_viaje_min", "lluvia24", "aspecto", "olor", "sedimento", "notas"].forEach(x => { if (vacio(sa[x]) && !vacio(sb[x])) { sa[x] = sb[x]; n++; } });
+    ["punto_id", "hora_ini", "hora_fin", "t_viaje_min", "lluvia24", "notas"].forEach(x => { if (vacio(sa[x]) && !vacio(sb[x])) { sa[x] = sb[x]; n++; } });
     (sb.meteo || []).forEach(mb => { if (!(sa.meteo || (sa.meteo = [])).some(m => m.hora === mb.hora)) { sa.meteo.push(mb); n++; } }); sa.meteo.sort((x, y) => (x.hora || "") < (y.hora || "") ? -1 : 1);
   });
   return n;
@@ -160,8 +154,8 @@ function combinarMuestreo(a, b) {
 function muestreoCsv() {                    // filas para el .csv de «Guardar»: datos del sitio y una fila por lectura hidroclimatológica
   const c = C(); if (!c.muestreo) return []; const M = c.muestreo;
   const L = [[], ["MUESTREO DE CALIDAD"], ["Equipo", M.equipo, "Serie", M.serie, "Calibración", M.calib],
-    ["Sitio", "Punto", "Latitud", "Longitud", "Precisión (m)", "Cota (m)", "Dónde en la sección", "Tipo", "Inicio", "Fin", "Tiempo de viaje (min)", "Lluvia 24 h", "Aspecto", "Olor", "Sedimento", "Notas"]];
-  SITIOS_M.forEach(s => { const S = sitioM(s.k), p = punto(S.punto_id) || {}; L.push([s.n.slice(4), p.nombre, p.lat, p.lon, p.acc, p.cota, S.toma, S.tipo, S.hora_ini, S.hora_fin, S.t_viaje_min, S.lluvia24, S.aspecto, S.olor, S.sedimento, S.notas]); });
+    ["Sitio", "Punto", "Latitud", "Longitud", "Precisión (m)", "Cota (m)", "Inicio", "Fin", "Tiempo de viaje (min)", "Lluvia 24 h", "Notas"]];
+  SITIOS_M.forEach(s => { const S = sitioM(s.k), p = punto(S.punto_id) || {}; L.push([s.n.slice(4), p.nombre, p.lat, p.lon, p.acc, p.cota, S.hora_ini, S.hora_fin, S.t_viaje_min, S.lluvia24, S.notas]); });
   L.push([], ["HIDROCLIMATOLOGÍA", "Fecha", "Sitio", "Hora", "T aire (°C)", "HR (%)", "T rocío (°C)", "Viento (m/s)", "Altura del viento (m)", "Nubosidad (%)", "Sombra (%)", "Radiación (W/m2)"]);
   SITIOS_M.forEach(s => sitioM(s.k).meteo.forEach(m => { const d = rocioM(m.t_aire, m.hr); L.push(["", c.fecha, s.n.slice(4), m.hora, m.t_aire, m.hr, d === null ? "" : d.toFixed(1), m.viento, m.h_viento, m.nub_pct, m.sombra_pct, m.rad]); }));
   return L;
