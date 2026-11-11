@@ -127,7 +127,7 @@ function fijarPunto(seg) {      // promedia los fixes de unos segundos (media po
 
 // ------------------------------------------------------------------ aviso de respaldo: lo escrito vive solo en este navegador; el archivo .json es la copia real
 function pintarResp() {
-  const e = $("resp"); if (!e) return; const c = C(), hay = c.puntos.length || c.eventos.length || c.aforos.length || c.inyeccion.masa_kg, sin = hay && c.mod && (!c.exp || c.mod > c.exp);
+  const e = $("resp"); if (!e) return; const c = C(), hay = c.puntos.length || c.eventos.length || c.aforos.length || c.inyeccion.masa_kg || c.muestreo, sin = hay && c.mod && (!c.exp || c.mod > c.exp);
   e.style.display = sin ? "flex" : "none";
   if (sin) e.innerHTML = `<span>⚠ Cambios sin respaldar${c.exp ? " desde las " + new Date(c.exp).toLocaleTimeString("es-CO", {hour: "2-digit", minute: "2-digit"}) : " (nunca se ha respaldado)"}. Si borra la app o los datos del navegador se pierden.</span><button class="b p" id="resp-ir">Respaldar</button>`;
   if ($("resp-ir")) $("resp-ir").onclick = () => { TAB = "exp"; mostrar(); };
@@ -139,7 +139,7 @@ document.querySelectorAll("#nav button").forEach(b => b.onclick = () => { TAB = 
 function mostrar() {
   document.querySelectorAll("#nav button").forEach(x => x.classList.toggle("on", x.dataset.t === TAB));
   document.querySelectorAll("main section").forEach(s => s.classList.toggle("on", s.id === "t-" + TAB));
-  ({pun: pintarPuntos, rec: pintarRecorrido, prog: pintarProg, camp: pintarCampana, exp: pintarGuardar})[TAB](); pintarResp();
+  ({pun: pintarPuntos, rec: pintarRecorrido, prog: pintarProg, camp: pintarCampana, mue: () => pintarMuestreo(), exp: pintarGuardar})[TAB](); pintarResp();
 }
 function pintarCabecera() {
   $("sel-camp").innerHTML = DB.campanas.map(c => `<option value="${c.id}"${c.id === DB.activa ? " selected" : ""}>${esc(c.nombre)}</option>`).join("") + '<option value="__nueva">+ Nueva campaña…</option>';
@@ -480,7 +480,7 @@ async function agregarFotos(files, ctx, puntoId, etiqueta) {
     try {
       const iso = new Date().toISOString(), reciente = ULT && Date.now() - ULT.t < 120000;
       const pos = reciente ? {lat: ULT.lat, lon: ULT.lon, acc: Math.round(ULT.acc), pos_origen: "gps"} : p && isFinite(p.lat) ? {lat: p.lat, lon: p.lon, acc: p.acc ?? null, pos_origen: "punto"} : {};
-      const lineas = [c.nombre, etiqueta + (p ? " · " + p.nombre : ""), new Date(iso).toLocaleString("es-CO"), pos.lat != null ? pos.lat.toFixed(5) + ", " + pos.lon.toFixed(5) + (pos.acc ? " (±" + pos.acc + " m)" : "") + (pos.pos_origen === "punto" ? " del punto" : "") : "sin posición"];
+      const sm = /^m:/.test(puntoId || "") ? SITIOS_M.find(x => x.k === puntoId.slice(2)) : null, lineas = [c.nombre, etiqueta + (p ? " · " + p.nombre : sm ? " · " + sm.n.slice(4) : ""), new Date(iso).toLocaleString("es-CO"), pos.lat != null ? pos.lat.toFixed(5) + ", " + pos.lon.toFixed(5) + (pos.acc ? " (±" + pos.acc + " m)" : "") + (pos.pos_origen === "punto" ? " del punto" : "") : "sin posición"];
       const r = await procesarImagen(f, lineas), id = "f" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
       await FDB.poner({id, camp: c.id, blob: r.blob});
       (c.fotos = c.fotos || []).push({id, ctx, punto_id: puntoId || null, etiqueta, nota: "", iso, ...pos, w: r.w, h: r.h, kb: Math.round(r.blob.size / 1024), mini: r.mini}); guardar(); n++;
@@ -599,8 +599,9 @@ function combinarCampanas(a, b, d) {          // suma a la campaña a lo que tra
   ["responsable", "cuadrilla", "clima"].forEach(k => { if (vacio(a[k]) && !vacio(b[k])) a[k] = b[k]; });
   if (!vacio(b.observaciones) && !(a.observaciones || "").includes(b.observaciones)) a.observaciones = (a.observaciones ? a.observaciones + "\n" : "") + "— " + rolEtiquetaDe(rolB, b) + (rolB?.nombre ? " (" + rolB.nombre + ")" : "") + ": " + b.observaciones;
   if (!a.programacion && b.programacion) a.programacion = b.programacion;
+  r.mu = combinarMuestreo(a, b.muestreo);
   if (!(a.aportes || []).some(x => x.exportado && x.exportado === d.exportado && JSON.stringify(x.rol) === JSON.stringify(rolB))) a.aportes = [...(a.aportes || []), {rol: rolB, exportado: d.exportado || null, eventos: r.ev, fotos: r.fo}];
-  return `+${r.ev} eventos, +${r.fo} fotos, +${r.af} aforos${r.pt ? ", +" + r.pt + " puntos" : ""}; registros de: ${r.reg.length ? r.reg.join(", ") : "ninguna estación"}.`;
+  return `+${r.ev} eventos, +${r.fo} fotos, +${r.af} aforos${r.mu ? ", +" + r.mu + " datos de muestreo" : ""}${r.pt ? ", +" + r.pt + " puntos" : ""}; registros de: ${r.reg.length ? r.reg.join(", ") : "ninguna estación"}.`;
 }
 
 // ------------------------------------------------------------------ GUARDAR (exportar / importar)
@@ -612,7 +613,7 @@ function datosExport() {
   return {formato: "ccp-bitacora-trazadores", version: 2, proyecto_id: null, campana_id: c.id, exportado: new Date().toISOString(), campana: {nombre: c.nombre, fecha: c.fecha, responsable: c.responsable, cuadrilla: c.cuadrilla, clima: c.clima},
     inyeccion: {masa_kg: c.inyeccion.masa_kg, pureza: c.inyeccion.pureza, agua_l: c.inyeccion.agua_l, hora: c.inyeccion.hora, t0_iso: c.inyeccion.t0_iso, sal: c.inyeccion.sal, origen: c.inyeccion.origen || null, punto: c.puntos[ii]?.nombre || ""},
     puntos: c.puntos.map((p, i) => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, precision_m: p.acc, cota: p.cota ?? null, cota_origen: p.cota_origen ?? null, alt_gps: p.alt_gps ?? null, alt_acc: p.alt_acc ?? null, notas: p.notas, abscisa_m: A[i], dist_anterior_m: i ? L[i - 1].d : null, origen_distancia: i ? L[i - 1].origen : null, dist_desde_inyeccion_m: ii >= 0 && A[i] !== null && A[ii] !== null ? A[i] - A[ii] : null, hidraulica: p.hid})),
-    fotos: c.fotos || [], rol: c.rol || null, aportes: c.aportes || [], ensayo: {estado: ens().estado, t_fin_iso: ens().t_fin_iso, check: ens().check || {}}, tramos: c.tramos, parametros: c.params, programacion: c.programacion, registro_estaciones: Object.fromEntries(Object.entries(c.registros).map(([id, r]) => [punto(id)?.nombre || id, r])), aforos: c.aforos, eventos: c.eventos, observaciones: c.observaciones};
+    fotos: c.fotos || [], muestreo: muestreoExport(), rol: c.rol || null, aportes: c.aportes || [], ensayo: {estado: ens().estado, t_fin_iso: ens().t_fin_iso, check: ens().check || {}}, tramos: c.tramos, parametros: c.params, programacion: c.programacion, registro_estaciones: Object.fromEntries(Object.entries(c.registros).map(([id, r]) => [punto(id)?.nombre || id, r])), aforos: c.aforos, eventos: c.eventos, observaciones: c.observaciones};
 }
 function blobJson() { const b = new Blob([JSON.stringify(datosExport(), null, 1)], {type: "application/json"}); C().exp = Date.now() + 1; guardar(true); pintarResp(); const u = $("ult-resp"); if (u) u.textContent = new Date(C().exp).toLocaleString("es-CO"); return b; }
 function csv() {
@@ -621,7 +622,7 @@ function csv() {
     ["N°", "Punto", "Función", "Latitud", "Longitud", "Precisión (m)", "Abscisa (m)", "Dist. al anterior (m)", "Origen de la distancia", "Dist. desde inyección (m)", "Cota (m)", "Sonda", "Inicio real", "Fin real", "EC fondo", "Hora del pico", "Notas"]);
   d.puntos.forEach((p, i) => { const r = c.registros[p.id] || {}; L.push([i + 1, p.nombre, p.rol, p.lat, p.lon, p.precision_m, p.abscisa_m?.toFixed(1), p.dist_anterior_m?.toFixed(1), p.origen_distancia, p.dist_desde_inyeccion_m?.toFixed(1), p.cota, r.sonda, r.inicio, r.fin, r.ec_fondo, r.pico, p.notas || r.notas]); });
   L.push([], ["Aforo: punto", "Q (L/s)", "Hora", "Método"]); c.aforos.forEach(a => L.push([a.punto, a.q_ls, a.hora, a.metodo]));
-  L.push([], ["Hora", "Evento"]); c.eventos.forEach(e => L.push([e.hora, e.texto])); L.push([], ["Observaciones", c.observaciones]);
+  L.push([], ["Hora", "Evento"]); c.eventos.forEach(e => L.push([e.hora, e.texto])); L.push([], ["Observaciones", c.observaciones]); muestreoCsv().forEach(r => L.push(r));
   return new Blob(["﻿" + L.map(r => r.map(q).join(";")).join("\r\n")], {type: "text/csv;charset=utf-8"});
 }
 function gpx() {
@@ -660,7 +661,7 @@ function pintarGuardar() {
       puntos: (d.puntos || []).map(p => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, acc: p.precision_m, cota: p.cota ?? null, cota_origen: p.cota_origen ?? null, alt_gps: p.alt_gps ?? null, alt_acc: p.alt_acc ?? null, notas: p.notas || "", hid: p.hidraulica || {}})), tramos: d.tramos || [], params: {...PARAM0, ...(d.parametros || {})}, aforos: d.aforos || [], eventos: d.eventos || [], programacion: d.programacion || null,
       inyeccion: {...k.inyeccion, masa_kg: d.inyeccion?.masa_kg ?? null, pureza: d.inyeccion?.pureza ?? 0.95, agua_l: d.inyeccion?.agua_l ?? null, hora: d.inyeccion?.hora || "", t0_iso: d.inyeccion?.t0_iso || null, sal: d.inyeccion?.sal || "", origen: d.inyeccion?.origen || null}});
       k.ensayo = d.ensayo ? {estado: d.ensayo.estado || "preparando", t_fin_iso: d.ensayo.t_fin_iso || null, check: d.ensayo.check || {}, avisos: {}} : undefined; k.registros = {}; Object.entries(d.registro_estaciones || {}).forEach(([nom, r]) => { const p = k.puntos.find(x => x.nombre === nom); if (p) k.registros[p.id] = r; });
-      k.aportes = d.aportes || []; const prev = DB.campanas.find(x => x.id === k.id);
+      k.aportes = d.aportes || []; k.muestreo = muestreoImport(d.muestreo); const prev = DB.campanas.find(x => x.id === k.id);
       if (prev) return decidir("Ya tiene la campaña «" + prev.nombre + "» en este teléfono. ¿Qué hace con el archivo?", [["combinar", "Combinar: sumar lo nuevo"], ["reemplazar", "Reemplazar la campaña"], ["cancelar", "Cancelar"]]).then(op => {
         if (op === "cancelar") return msgArchivo("Carga cancelada.");
         if (op === "reemplazar") return colocar(k, blobs);

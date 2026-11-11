@@ -22,7 +22,7 @@ header h1{margin:0;font-size:1rem}header select{width:auto;max-width:55%;padding
 .btnl{display:inline-flex;flex-direction:row;align-items:center;gap:.3rem;padding:.4rem .7rem;border-radius:.5rem;background:#e8ebf2;color:var(--az);font-size:.85rem;cursor:pointer;flex:0 0 auto}
 #gps{padding:.35rem 1rem;font-size:.85rem;background:#eef1f7;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;gap:.5rem;flex-wrap:wrap}
 nav{display:flex;gap:.25rem;background:var(--fd);padding:.35rem;position:sticky;top:2.9rem;z-index:5;border-bottom:1px solid var(--bd)}
-nav button{flex:1;padding:.55rem .1rem;border:1px solid var(--bd);background:#fff;border-radius:.5rem;font-size:.8rem}
+nav button{flex:1;padding:.55rem .1rem;border:1px solid var(--bd);background:#fff;border-radius:.5rem;font-size:.74rem}
 nav button.on{background:var(--az);color:#fff;border-color:var(--az)}
 main{padding:.6rem 1rem;max-width:62rem;margin:auto}
 section{display:none}section.on{display:block}
@@ -47,6 +47,7 @@ table{border-collapse:collapse;width:100%;font-size:.86rem}th,td{border-bottom:1
 .rec{border:2px solid var(--ro);background:#fff6f4}
 .pt{display:flex;gap:.5rem;align-items:center;justify-content:space-between}
 .mapa{width:100%;height:auto;background:#f7f9fc;border:1px solid var(--bd);border-radius:.5rem}
+.scroll table input{min-width:4.3rem}.scroll table input[type=time]{min-width:8.2rem}
 svg text{font-size:11px;fill:#444}
 </style>
 </head>
@@ -55,14 +56,16 @@ svg text{font-size:11px;fill:#444}
 <div id="gps"><span id="gps-est">GPS apagado</span><span id="gps-btn"></span></div>
 <div id="resp" style="display:none"></div>
 <div id="aviso-ensayo"></div>
-<nav id="nav"><button data-t="pun" class="on">Puntos</button><button data-t="rec">Recorrido</button><button data-t="prog">Programar</button><button data-t="camp">Ensayo</button><button data-t="exp">Guardar</button></nav>
+<nav id="nav"><button data-t="pun" class="on">Puntos</button><button data-t="rec">Recorrido</button><button data-t="prog">Programar</button><button data-t="camp">Ensayo</button><button data-t="mue">Muestreo</button><button data-t="exp">Guardar</button></nav>
 <main>
 <section id="t-pun" class="on"></section>
 <section id="t-rec"></section>
 <section id="t-prog"></section>
 <section id="t-camp"></section>
+<section id="t-mue"></section>
 <section id="t-exp"></section>
 </main>
 <script src="app.js"></script>
+<script src="muestreo.js"></script>
 </body>
 </html>
