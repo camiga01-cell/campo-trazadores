@@ -599,7 +599,7 @@ function combinarCampanas(a, b, d) {          // suma a la campaña a lo que tra
   ["responsable", "cuadrilla", "clima"].forEach(k => { if (vacio(a[k]) && !vacio(b[k])) a[k] = b[k]; });
   if (!vacio(b.observaciones) && !(a.observaciones || "").includes(b.observaciones)) a.observaciones = (a.observaciones ? a.observaciones + "\n" : "") + "— " + rolEtiquetaDe(rolB, b) + (rolB?.nombre ? " (" + rolB.nombre + ")" : "") + ": " + b.observaciones;
   if (!a.programacion && b.programacion) a.programacion = b.programacion;
-  r.mu = combinarMuestreo(a, b.muestreo);
+  r.mu = typeof combinarMuestreo === "function" ? combinarMuestreo(a, b.muestreo) : 0;
   if (!(a.aportes || []).some(x => x.exportado && x.exportado === d.exportado && JSON.stringify(x.rol) === JSON.stringify(rolB))) a.aportes = [...(a.aportes || []), {rol: rolB, exportado: d.exportado || null, eventos: r.ev, fotos: r.fo}];
   return `+${r.ev} eventos, +${r.fo} fotos, +${r.af} aforos${r.mu ? ", +" + r.mu + " datos de muestreo" : ""}${r.pt ? ", +" + r.pt + " puntos" : ""}; registros de: ${r.reg.length ? r.reg.join(", ") : "ninguna estación"}.`;
 }
@@ -613,7 +613,7 @@ function datosExport() {
   return {formato: "ccp-bitacora-trazadores", version: 2, proyecto_id: null, campana_id: c.id, exportado: new Date().toISOString(), campana: {nombre: c.nombre, fecha: c.fecha, responsable: c.responsable, cuadrilla: c.cuadrilla, clima: c.clima},
     inyeccion: {masa_kg: c.inyeccion.masa_kg, pureza: c.inyeccion.pureza, agua_l: c.inyeccion.agua_l, hora: c.inyeccion.hora, t0_iso: c.inyeccion.t0_iso, sal: c.inyeccion.sal, origen: c.inyeccion.origen || null, punto: c.puntos[ii]?.nombre || ""},
     puntos: c.puntos.map((p, i) => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, precision_m: p.acc, cota: p.cota ?? null, cota_origen: p.cota_origen ?? null, alt_gps: p.alt_gps ?? null, alt_acc: p.alt_acc ?? null, notas: p.notas, abscisa_m: A[i], dist_anterior_m: i ? L[i - 1].d : null, origen_distancia: i ? L[i - 1].origen : null, dist_desde_inyeccion_m: ii >= 0 && A[i] !== null && A[ii] !== null ? A[i] - A[ii] : null, hidraulica: p.hid})),
-    fotos: c.fotos || [], muestreo: muestreoExport(), rol: c.rol || null, aportes: c.aportes || [], ensayo: {estado: ens().estado, t_fin_iso: ens().t_fin_iso, check: ens().check || {}}, tramos: c.tramos, parametros: c.params, programacion: c.programacion, registro_estaciones: Object.fromEntries(Object.entries(c.registros).map(([id, r]) => [punto(id)?.nombre || id, r])), aforos: c.aforos, eventos: c.eventos, observaciones: c.observaciones};
+    fotos: c.fotos || [], muestreo: typeof muestreoExport === "function" ? muestreoExport() : null, rol: c.rol || null, aportes: c.aportes || [], ensayo: {estado: ens().estado, t_fin_iso: ens().t_fin_iso, check: ens().check || {}}, tramos: c.tramos, parametros: c.params, programacion: c.programacion, registro_estaciones: Object.fromEntries(Object.entries(c.registros).map(([id, r]) => [punto(id)?.nombre || id, r])), aforos: c.aforos, eventos: c.eventos, observaciones: c.observaciones};
 }
 function blobJson() { const b = new Blob([JSON.stringify(datosExport(), null, 1)], {type: "application/json"}); C().exp = Date.now() + 1; guardar(true); pintarResp(); const u = $("ult-resp"); if (u) u.textContent = new Date(C().exp).toLocaleString("es-CO"); return b; }
 function csv() {
@@ -622,7 +622,7 @@ function csv() {
     ["N°", "Punto", "Función", "Latitud", "Longitud", "Precisión (m)", "Abscisa (m)", "Dist. al anterior (m)", "Origen de la distancia", "Dist. desde inyección (m)", "Cota (m)", "Sonda", "Inicio real", "Fin real", "EC fondo", "Hora del pico", "Notas"]);
   d.puntos.forEach((p, i) => { const r = c.registros[p.id] || {}; L.push([i + 1, p.nombre, p.rol, p.lat, p.lon, p.precision_m, p.abscisa_m?.toFixed(1), p.dist_anterior_m?.toFixed(1), p.origen_distancia, p.dist_desde_inyeccion_m?.toFixed(1), p.cota, r.sonda, r.inicio, r.fin, r.ec_fondo, r.pico, p.notas || r.notas]); });
   L.push([], ["Aforo: punto", "Q (L/s)", "Hora", "Método"]); c.aforos.forEach(a => L.push([a.punto, a.q_ls, a.hora, a.metodo]));
-  L.push([], ["Hora", "Evento"]); c.eventos.forEach(e => L.push([e.hora, e.texto])); L.push([], ["Observaciones", c.observaciones]); muestreoCsv().forEach(r => L.push(r));
+  L.push([], ["Hora", "Evento"]); c.eventos.forEach(e => L.push([e.hora, e.texto])); L.push([], ["Observaciones", c.observaciones]); if (typeof muestreoCsv === "function") muestreoCsv().forEach(r => L.push(r));
   return new Blob(["﻿" + L.map(r => r.map(q).join(";")).join("\r\n")], {type: "text/csv;charset=utf-8"});
 }
 function gpx() {
@@ -661,7 +661,7 @@ function pintarGuardar() {
       puntos: (d.puntos || []).map(p => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, acc: p.precision_m, cota: p.cota ?? null, cota_origen: p.cota_origen ?? null, alt_gps: p.alt_gps ?? null, alt_acc: p.alt_acc ?? null, notas: p.notas || "", hid: p.hidraulica || {}})), tramos: d.tramos || [], params: {...PARAM0, ...(d.parametros || {})}, aforos: d.aforos || [], eventos: d.eventos || [], programacion: d.programacion || null,
       inyeccion: {...k.inyeccion, masa_kg: d.inyeccion?.masa_kg ?? null, pureza: d.inyeccion?.pureza ?? 0.95, agua_l: d.inyeccion?.agua_l ?? null, hora: d.inyeccion?.hora || "", t0_iso: d.inyeccion?.t0_iso || null, sal: d.inyeccion?.sal || "", origen: d.inyeccion?.origen || null}});
       k.ensayo = d.ensayo ? {estado: d.ensayo.estado || "preparando", t_fin_iso: d.ensayo.t_fin_iso || null, check: d.ensayo.check || {}, avisos: {}} : undefined; k.registros = {}; Object.entries(d.registro_estaciones || {}).forEach(([nom, r]) => { const p = k.puntos.find(x => x.nombre === nom); if (p) k.registros[p.id] = r; });
-      k.aportes = d.aportes || []; k.muestreo = muestreoImport(d.muestreo); const prev = DB.campanas.find(x => x.id === k.id);
+      k.aportes = d.aportes || []; k.muestreo = typeof muestreoImport === "function" ? muestreoImport(d.muestreo) : undefined; const prev = DB.campanas.find(x => x.id === k.id);
       if (prev) return decidir("Ya tiene la campaña «" + prev.nombre + "» en este teléfono. ¿Qué hace con el archivo?", [["combinar", "Combinar: sumar lo nuevo"], ["reemplazar", "Reemplazar la campaña"], ["cancelar", "Cancelar"]]).then(op => {
         if (op === "cancelar") return msgArchivo("Carga cancelada.");
         if (op === "reemplazar") return colocar(k, blobs);
@@ -678,14 +678,14 @@ function pintarGuardar() {
   const importarArchivo = async f => {
     const buf = await (f.arrayBuffer ? f.arrayBuffer().catch(() => null) : null) || await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error("leer")); r.readAsArrayBuffer(f); }), b2 = new Uint8Array(buf, 0, 2);
     if (b2[0] === 0x50 && b2[1] === 0x4b) {                                             // .zip: datos + fotos
-      const m = await leerZip(buf), j = m.get("campana.json"); if (!j) throw new Error("el .zip no trae campana.json"); const blobs = new Map();
-      m.forEach((data, name) => { if (name.startsWith("fotos/")) blobs.set(name.slice(6).replace(/\.jpg$/, ""), new Blob([data], {type: "image/jpeg"})); });
+      const m = await leerZip(buf); let j = m.get("campana.json"); if (!j) { const k = [...m.keys()].find(n => /(^|[\/\\])campana\.json$/i.test(n)); if (k) j = m.get(k); } if (!j) throw new Error("el .zip no trae campana.json (trae: " + [...m.keys()].slice(0, 4).join(", ") + ")"); const blobs = new Map();
+      m.forEach((data, name) => { const q = name.match(/(?:^|[\/\\])fotos[\/\\]([^\/\\]+)\.jpe?g$/i); if (q) blobs.set(q[1], new Blob([data], {type: "image/jpeg"})); });
       await importar(new TextDecoder().decode(j), blobs);
     } else await importar(new TextDecoder().decode(buf));
   };
   $("x-file").onchange = async ev => { const fs = [...ev.target.files]; if (!fs.length) return;
     for (const f of fs) { msgArchivo("Leyendo «" + f.name + "» (" + Math.max(1, Math.round(f.size / 1024)) + " KB)…");
-      try { await importarArchivo(f); } catch (e) { msgArchivo("No se pudo leer «" + f.name + "». Si está en Drive: ábralo en la app de Drive, toque ⋮ → Descargar, y elíjalo desde «Descargas»; o use «pegar su contenido» aquí abajo.", true); } }
+      try { await importarArchivo(f); } catch (e) { msgArchivo("No se pudo leer «" + f.name + "» (" + (e && e.message || e) + "). Si está en Drive: ábralo en la app de Drive, toque ⋮ → Descargar, y elíjalo desde «Descargas»; o use «pegar su contenido» aquí abajo.", true); } }
     ev.target.value = ""; };
   $("x-pegar-ok").onclick = () => { const t = $("x-pegar").value.trim(); if (!t) return msgArchivo("Pegue primero el texto del archivo.", true); importar(t); };
   document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => { const k = DB.campanas.find(x => x.id === b.dataset.del); if (confirm("¿Borrar «" + k.nombre + "» de este teléfono? Si no la descargó, se pierde (también sus fotos).")) { (k.fotos || []).forEach(f => FDB.borrar(f.id).catch(() => {})); DB.campanas = DB.campanas.filter(x => x !== k); if (DB.activa === k.id) DB.activa = DB.campanas[0].id; guardar(); pintarCabecera(); pintarGuardar(); } });
