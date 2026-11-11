@@ -5,7 +5,7 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&
 const nf = (v, d = 1) => v === null || v === undefined || !isFinite(v) ? "—" : Number(v).toLocaleString("es-CO", {minimumFractionDigits: d, maximumFractionDigits: d});
 const pad = n => String(n).padStart(2, "0");
 const horaTxt = f => pad(f.getHours()) + ":" + pad(f.getMinutes()) + ":" + pad(f.getSeconds());
-const ROLES = [["inyeccion", "Inyección del trazador"], ["monitoreo", "Estación de monitoreo"], ["vertimiento", "Vertimiento"], ["afluente", "Afluente"], ["otro", "Otro"]];
+const ROLES = [["inyeccion", "Inyección del trazador"], ["monitoreo", "Estación de monitoreo"], ["vertimiento", "Vertimiento"], ["afluente", "Afluente"], ["muestreo", "Sitio de muestreo de calidad"], ["otro", "Otro"]];
 const PARAM0 = {tipo_inyeccion: 1, mult_pico: 10, dec_min: 30, k: 0.5, pureza: 0.95, f_seguridad: 1.5, solubilidad_g_l: 250, alpha_t: 0.6};
 const AJ0 = {acc_max: 20, paso_min: 3, seg_promedio: 10, fondo: "calle"};
 
@@ -203,7 +203,7 @@ function mapaSVG() {
   for (let i = 1; i < c.puntos.length; i++) { const a = c.puntos[i - 1], b = c.puntos[i]; if (!tramoEntre(a.id, b.id) && isFinite(a.lat) && isFinite(b.lat)) s += `<path d="${lin([[a.lat, a.lon], [b.lat, b.lon]])}" fill="none" stroke="#fff" stroke-width="5" opacity=".8"/><path d="${lin([[a.lat, a.lon], [b.lat, b.lon]])}" fill="none" stroke="#5b6577" stroke-width="2.5" stroke-dasharray="6 5"/>`; }
   tr.forEach(t => { s += `<path d="${lin(t.pts)}" fill="none" stroke="#fff" stroke-width="6" opacity=".85" stroke-linejoin="round"/><path d="${lin(t.pts)}" fill="none" stroke="#1F3864" stroke-width="3" stroke-linejoin="round"/>`; });
   if (REC && REC.pts.length > 1) s += `<path d="${lin(REC.pts)}" fill="none" stroke="#fff" stroke-width="7" stroke-linejoin="round"/><path d="${lin(REC.pts)}" fill="none" stroke="#c0392b" stroke-width="3.5" stroke-linejoin="round"/>`;
-  const col = {inyeccion: "#c0392b", monitoreo: "#1F3864", vertimiento: "#8e44ad", afluente: "#2e8b57", otro: "#777"};
+  const col = {inyeccion: "#c0392b", monitoreo: "#1F3864", vertimiento: "#8e44ad", afluente: "#2e8b57", muestreo: "#d35400", otro: "#777"};
   P.forEach(p => { const q = pt(p.lat, p.lon), i = c.puntos.indexOf(p) + 1, der = q[0] < W - 150, tx = der ? q[0] + 11 : q[0] - 11;
     s += `<circle cx="${q[0].toFixed(1)}" cy="${q[1].toFixed(1)}" r="7" fill="${col[p.rol] || "#777"}" stroke="#fff" stroke-width="2.5"/><text x="${tx.toFixed(1)}" y="${(q[1] - 9).toFixed(1)}" text-anchor="${der ? "start" : "end"}" style="font-size:12px;font-weight:600;paint-order:stroke;stroke:#fff;stroke-width:3.5px;stroke-linejoin:round;fill:#1d2433">${i}. ${esc(p.nombre)}</text>`; });
   if (ULT) { const q = pt(ULT.lat, ULT.lon), r = Math.max(6, ULT.acc * sc / mPorU); s += `<circle cx="${q[0].toFixed(1)}" cy="${q[1].toFixed(1)}" r="${Math.min(r, 60).toFixed(1)}" fill="#2b8cff" opacity=".15"/><circle cx="${q[0].toFixed(1)}" cy="${q[1].toFixed(1)}" r="6" fill="#2b8cff" stroke="#fff" stroke-width="2.5"/>`; }
