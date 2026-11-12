@@ -649,7 +649,9 @@ function pintarGuardar() {
     <details class="card"><summary><b>Si no logra elegir el archivo: pegar su contenido</b></summary><p class="nota">Abra el .json en el teléfono (Drive lo muestra como texto), toque «seleccionar todo», copie y pegue aquí.</p><textarea id="x-pegar" placeholder="Pegue aquí todo el texto del archivo .json" style="min-height:6rem"></textarea><button class="b g" id="x-pegar-ok" style="margin-top:.4rem">Cargar el texto pegado</button></details>
     <h2>Campañas en este teléfono</h2><div class="card">${DB.campanas.map(k => `<div class="pt" style="padding:.25rem 0"><span>${esc(k.nombre)} <span class="nota">(${k.puntos.length} puntos)</span></span>${DB.campanas.length > 1 ? `<button class="b g p" data-del="${k.id}" style="color:var(--ro)">Borrar</button>` : ""}</div>`).join("")}</div>
     <h2>Instalar en el celular</h2><div class="card">${instalada ? "<p>✔ Ya está instalada.</p>" : PROMPT_INSTALAR ? '<button class="b" id="x-inst" style="width:100%">Anclar a la pantalla de inicio</button>' : ios ? '<p class="nota">En iPhone: abra esta página en Safari, toque el botón Compartir y elija «Agregar a pantalla de inicio».</p>' : '<p class="nota">En Android: menú ⋮ del navegador → «Instalar aplicación» o «Agregar a pantalla de inicio». Si no aparece, la página debe abrirse con https://.</p>'}
-    <p class="nota">${"serviceWorker" in navigator && navigator.serviceWorker.controller ? "✔ Guardada para trabajar sin internet." : "Aún no está guardada para usarla sin internet (ábrala una vez con conexión)."}</p></div>`;
+    <p class="nota">${"serviceWorker" in navigator && navigator.serviceWorker.controller ? "✔ Guardada para trabajar sin internet." : "Aún no está guardada para usarla sin internet (ábrala una vez con conexión)."}</p>
+    <p class="nota">Versión de la app: <b>${APP_VERSION}</b>. Si no ve los cambios más recientes, conéctese a internet y toque el botón: baja la versión nueva <b>sin borrar sus campañas ni fotos</b>.</p><button class="b g" id="x-act" style="width:100%">Actualizar la app ahora</button></div>`;
+  if ($("x-act")) $("x-act").onclick = actualizarApp;
   $("x-zip").onclick = async () => { descargar(await construirZip(), base() + ".zip"); $("x-msg").textContent = "Descargado (carpeta Descargas): incluye los datos y las fotos."; };
   $("x-json").onclick = () => { descargar(blobJson(), base() + ".json"); $("x-msg").textContent = "Descargado (carpeta Descargas)."; };
   $("x-csv").onclick = () => descargar(csv(), base() + ".csv"); $("x-gpx").onclick = () => descargar(gpx(), base() + ".gpx"); $("x-kml").onclick = () => descargar(kml(), base() + ".kml");
@@ -693,7 +695,16 @@ function pintarGuardar() {
 }
 
 // ------------------------------------------------------------------ arranque
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+const APP_VERSION = "campo-v29";
+if ("serviceWorker" in navigator) {
+  const habiaControl = !!navigator.serviceWorker.controller; let recargado = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (!habiaControl || recargado || REC) return; recargado = true; location.reload(); });      // versión nueva lista: recarga (los datos están en el teléfono; no se recarga a mitad de un recorrido)
+  navigator.serviceWorker.register("sw.js").then(r => r.update && r.update()).catch(() => {});
+}
+async function actualizarApp() {
+  try { const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(r => r.unregister())); const ks = await caches.keys(); await Promise.all(ks.map(k => caches.delete(k))); } catch (e) {}
+  location.reload();
+}
 window.addEventListener("beforeunload", ev => { if (REC) { ev.preventDefault(); ev.returnValue = ""; } });
 try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().then(ok => { DB.persistente = ok; guardar(true); }); } catch (e) {}
 pintarCabecera(); pintarGPS(); mostrar();
