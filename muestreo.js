@@ -10,11 +10,12 @@ const SITIOS_M = [
 // Guía que aparece al tocar un campo: qué se espera que se anote y a qué hoja del modelo QUAL2K alimenta
 const AYUDA_M = {
   df: ["DF — fracción dispersiva", "Cuánto se ensancha la nube de trazador respecto del tiempo medio: primer arribo = (1 − DF) × tiempo medio. 0,27 es un valor de partida (de tablas del modelo de tiempo de viaje): por confirmar. Si el ensayo midió el primer arribo, el DF sale de ahí en la plataforma.", "Intervalo de muestreo de la misma masa de agua"],
+  vel: ["Velocidad media", "En m/s: caudal aforado ÷ área mojada, o el promedio de las velocidades de las verticales del aforo con molinete. Se usa para el tiempo de viaje (distancia ÷ velocidad) y para la longitud de mezcla.", "Tiempo de viaje y longitud de mezcla"],
+  vmax: ["Velocidad máxima", "La mayor velocidad medida en la sección: la de la vertical más rápida del aforo con molinete (m/s). Con la media da el DF = 1 − U/U_máx y de ahí el primer arribo (la masa de agua más rápida), sin procesar el ensayo.", "Intervalo de muestreo de la misma masa de agua"],
   ec_mezcla: ["Conductividad en la sección", "Con la sonda, a la misma profundidad en cada vertical, esperando que la lectura se estabilice. La conductividad es un trazador natural del vertimiento: si es igual de margen a margen, el vertimiento ya se mezcló.", "Verificación de mezcla completa"],
   descarga: ["Descarga en la sección", "Dónde entra el vertimiento al río: en la orilla (caso habitual, descarga lateral) o en el centro del cauce. Cambia el coeficiente de Fischer (0,4 en la orilla, 0,1 en el centro).", "Longitud de mezcla"],
   ancho: ["Ancho del río", "En metros, el ancho del espejo de agua en la sección del punto de mezcla, medido con cinta o telémetro.", "Longitud de mezcla (W)"],
   prof: ["Profundidad media", "En metros: promedio de las profundidades medidas en la sección (o área mojada ÷ ancho).", "Longitud de mezcla (H)"],
-  vel: ["Velocidad media", "En m/s: caudal aforado ÷ área mojada, o la del aforo con molinete. Debe ser la misma que usa el modelo hidráulico.", "Longitud de mezcla (U)"],
   pend: ["Pendiente", "Pendiente longitudinal del tramo en m/m (cota arriba − cota abajo) ÷ distancia por el cauce. Si ya anotó las cotas de los puntos, la app la calcula y la puede dejar vacía.", "Longitud de mezcla (S)"],
   dist_mezcla: ["Distancia desde la descarga", "Metros, por el cauce, entre el punto de descarga y la sección donde mide. Compárela con la longitud de mezcla calculada (Fischer).", "Verificación de mezcla completa"],
   tol_mezcla: ["Tolerancia de mezcla", "Variación máxima aceptada de la conductividad entre márgenes y centro, en % del promedio. 5 % es un valor de partida: por confirmar con el criterio de su protocolo o del laboratorio.", "Verificación de mezcla completa"],
@@ -81,7 +82,7 @@ function mue() {
 function sitioM(k) {
   const M = mue(); if (M.sitios[k]) { const E = M.sitios[k]; if (!E.meteo) E.meteo = []; if (!E.meteo.length && k !== "vertimiento") E.meteo.push(lecturaVacia()); if (k === "mezcla" && !E.mezcla) E.mezcla = mezclaVacia(); if (k === "vertimiento" && E.q_ls === undefined) { E.q_ls = null; E.metodo_q = ""; } return E; }
   const S = SITIOS_M.find(s => s.k === k);
-  return M.sitios[k] = {punto_id: null, hora_ini: "", hora_fin: "", t_viaje_min: null, t_auto: true, t_origen: "", vel_ms: null,
+  return M.sitios[k] = {punto_id: null, hora_ini: "", hora_fin: "", t_viaje_min: null, t_auto: true, t_origen: "", vel_ms: null, vmax_ms: null,
     meteo: k === "vertimiento" ? [] : [lecturaVacia()], lluvia24: "", notas: "", ...(k === "mezcla" ? {mezcla: mezclaVacia()} : {}), ...(k === "vertimiento" ? {q_ls: null, metodo_q: ""} : {})};
 }
 const horaDe = h => { if (!h) return null; const f = new Date(), [a, b, s] = h.split(":").map(Number); f.setHours(a, b, s || 0, 0); return f; };      // la hora escrita se toma como de hoy
@@ -149,16 +150,21 @@ function acumM(k) {                         // tiempo medio de viaje (min) desde
   if (completo && suma > 0) return suma;
   const P = propEntre("arriba", k), m = P.A || P.B; return m ? m.min : null;
 }
+function dfVelM(k) {                        // DF = 1 − U/U_máx con las velocidades medidas en los sitios del río, desde aguas arriba hasta el sitio k
+  const sitios = ["arriba", "mezcla", "abajo"], n = sitios.indexOf(k), R = [];
+  sitios.slice(0, n + 1).forEach(j => { const S = sitioM(j); if (S.vel_ms > 0 && S.vmax_ms > S.vel_ms) R.push(S.vel_ms / S.vmax_ms); });
+  if (!R.length) return null; const r = R.reduce((a, b) => a + b, 0) / R.length; return {df: 1 - r, n: R.length};
+}
 function ventanaM(k) {                      // Guía Nacional: entre el primer arribo (nunca antes) y el tiempo medio de viaje, contados desde la hora de la primera muestra
   const f0 = horaDe(sitioM("arriba").hora_ini); if (!f0) return {falta: "Anote la hora de inicio de la toma en «Aguas arriba» (la primera muestra) para ver el intervalo."};
   const t = acumM(k); if (!(t > 0)) return {falta: "Falta el tiempo de viaje desde aguas arriba: registre los picos del ensayo, la velocidad de los sitios o escríbalo en cada sitio."};
-  const df = mue().df >= 0 && mue().df < 1 ? mue().df : 0.27, tau = (1 - df) * t;
-  return {ini: new Date(f0.getTime() + tau * 60000), fin: new Date(f0.getTime() + t * 60000), tau, t, df};
+  const dv = dfVelM(k), dsup = mue().df >= 0 && mue().df < 1 ? mue().df : 0.27, df = dv ? dv.df : dsup, tau = (1 - df) * t, origenDF = dv ? `de las velocidades medidas, 1 − U/U_máx en ${dv.n} sección(es)` : "supuesto: no hay velocidad máxima y media";
+  return {ini: new Date(f0.getTime() + tau * 60000), fin: new Date(f0.getTime() + t * 60000), tau, t, df, origenDF};
 }
 function textoVentana(k) {
   const V = ventanaM(k); if (V.falta) return {html: V.falta, clase: "nota", V};
   const S = sitioM(k), ahora = Date.now(), hh = f => horaTxt(f).slice(0, 5), rango = `<b>${hh(V.ini)} – ${hh(V.fin)}</b>`;
-  const base = `Intervalo para muestrear la <b>misma masa de agua</b>: ${rango} <span class="nota">(a +${nf(V.tau, 1)} min el primer arribo y a +${nf(V.t, 1)} min el tiempo medio, desde la primera muestra; DF = ${nf(V.df, 2)})</span>`;
+  const base = `Intervalo para muestrear la <b>misma masa de agua</b>: ${rango} <span class="nota">(a +${nf(V.tau, 1)} min el primer arribo y a +${nf(V.t, 1)} min el tiempo medio, desde la primera muestra; DF = ${nf(V.df, 2)}, ${V.origenDF})</span>`;
   if (S.hora_ini) { const h = horaDe(S.hora_ini), d = h >= V.ini && h <= V.fin; return {html: `${base}<br>${d ? "✔ Su toma de las " + S.hora_ini.slice(0, 5) + " está dentro del intervalo." : '<span class="err">⚠ Su toma de las ' + S.hora_ini.slice(0, 5) + (h < V.ini ? " fue antes del primer arribo: no corresponde a la misma masa de agua." : " fue después del tiempo medio: la masa de agua ya pasó.") + "</span>"}`, clase: "nota", V}; }
   const dI = (V.ini.getTime() - ahora) / 1000, dF = (V.fin.getTime() - ahora) / 1000;
   const est = dI > 0 ? `Faltan <b>${mmss(dI)}</b> para que abra.` : dF > 0 ? `<b style="color:var(--ok)">AHORA es buen momento</b>: cierra en <b>${mmss(dF)}</b>.` : `<span class="err">El intervalo ya pasó hace ${mmss(-dF)}.</span>`;
@@ -181,7 +187,7 @@ function mezclaHtml(S, r) {
   const ubic = `<h2 style="font-size:.95rem">1 · ¿Está bien ubicado este punto? (longitud de mezcla)</h2>
     <p class="nota">La longitud de mezcla (Fischer) dice a qué distancia de la descarga el vertimiento se mezcla de orilla a orilla. Este punto debe quedar <b>a esa distancia o más</b> aguas abajo. Escriba el ancho, la profundidad y la velocidad del río en esta sección (las del aforo).</p>
     <div class="fila"><label>Descarga del vertimiento en la sección<select data-r="${z}.descarga" data-re="1" ${AY("descarga")}><option value="orilla"${Z.descarga !== "centro" ? " selected" : ""}>en la orilla (lateral)</option><option value="centro"${Z.descarga === "centro" ? " selected" : ""}>en el centro del cauce</option></select></label>
-      ${campo("Ancho del río (m)", z + ".ancho_m", "n", Z.ancho_m, AY("ancho", true))}${campo("Profundidad media (m)", z + ".prof_m", "n", Z.prof_m, AY("prof", true))}${campo("Velocidad media (m/s)", r + ".vel_ms", "n", S.vel_ms, AY("vel", true))}${campo("Pendiente (m/m)", z + ".pend", "n", Z.pend, AY("pend", true) + (pend0 ? ` placeholder="de las cotas: ${nf(pend0.s, 4)}"` : ""))}</div>
+      ${campo("Ancho del río (m)", z + ".ancho_m", "n", Z.ancho_m, AY("ancho", true))}${campo("Profundidad media (m)", z + ".prof_m", "n", Z.prof_m, AY("prof", true))}${campo("Pendiente (m/m)", z + ".pend", "n", Z.pend, AY("pend", true) + (pend0 ? ` placeholder="de las cotas: ${nf(pend0.s, 4)}"` : ""))}</div>
     ${!F ? '<div class="nota">Complete ancho, profundidad, velocidad y pendiente para calcular la longitud de mezcla.</div>' : (() => { const D2 = D ? D.m : (Z.dist_m > 0 ? Z.dist_m : null), falta = D2 === null ? null : F.Lm - D2;
       return `<div class="card" style="border-width:2px;border-color:${falta === null ? "var(--bd)" : falta <= 0 ? "var(--ok)" : "var(--ro)"}"><b>Longitud de mezcla (Fischer): ${nf(F.Lm, 0)} m</b>${D2 === null ? '<div class="nota">Ubique el punto del vertimiento y este sitio para comparar con la distancia real.</div>' : falta <= 0 ? `<div class="nota">✔ Distancia real desde la descarga: <b>${nf(D2, 0)} m</b> ≥ ${nf(F.Lm, 0)} m. La posición del punto es correcta.</div>` : `<div class="nota"><b style="color:var(--ro)">✗ Distancia real: ${nf(D2, 0)} m &lt; ${nf(F.Lm, 0)} m.</b> El punto está muy cerca: <b>desplácelo al menos ${nf(falta, 0)} m aguas abajo</b> (hasta ≥ ${nf(F.Lm, 0)} m de la descarga) y vuelva a marcar su ubicación.</div>`}
         <div class="nota">U* = ${nf(F.us, 3)} m/s · Et = ${nf(F.et, 4)} m²/s · coeficiente ${F.coef} (${Z.descarga === "centro" ? "centro" : "orilla"}) · α = ${nf(F.alfa, 2)} (por confirmar) · pendiente ${nf(F.S, 4)} (${F.origenS}).</div></div>`; })()}`;
@@ -223,7 +229,7 @@ function pintarMuestreo() {
       ${posicionHtml(s, S)}
       <h2 style="font-size:.95rem">Hora de la toma</h2>
       ${s.previo ? `<div class="fila">${campo("Tiempo de viaje desde «" + SITIOS_M.find(x => x.k === s.previo).n.slice(4) + "» (min)", r + ".t_viaje_min", "n", S.t_viaje_min, AY("t_viaje"))}</div><div class="nota" id="sug-${s.k}">${sug ? "" : "Con el tiempo de viaje y la hora de inicio del sitio anterior verá aquí la hora sugerida."}</div>${propuestaHtml(s.k, S, PT[s.k])}` : '<p class="nota">Este sitio marca el arranque: las horas de los demás se calculan desde su hora de inicio.</p>'}
-      ${s.k === "arriba" || s.k === "abajo" ? `<div class="fila">${campo("Velocidad media del río en este sitio (m/s) — del aforo", r + ".vel_ms", "n", S.vel_ms, AY("vel", true))}</div>` : ""}
+      ${s.k !== "vertimiento" ? `<div class="fila">${campo("Velocidad media en la sección (m/s) — del aforo", r + ".vel_ms", "n", S.vel_ms, AY("vel", true))}${campo("Velocidad máxima en la sección (m/s)", r + ".vmax_ms", "n", S.vmax_ms, AY("vmax", true))}</div>${S.vel_ms > 0 && S.vmax_ms > 0 && S.vmax_ms <= S.vel_ms ? '<div class="adv">⚠ La velocidad máxima debe ser mayor que la media: revise.</div>' : ""}` : ""}
       <div class="fila">${campo("Inicio de la toma", r + ".hora_ini", "h", S.hora_ini, 'data-re="1"')}${campo("Fin de la toma", r + ".hora_fin", "h", S.hora_fin)}</div>
       <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin:.3rem 0"><button class="b g p" data-ahoram="${s.k}|hora_ini">Empecé ahora</button><button class="b g p" data-ahoram="${s.k}|hora_fin">Terminé ahora</button></div>
       ${W.length ? `<div class="adv">⚠ ${W.join(" · ")}</div>` : ""}
@@ -233,7 +239,7 @@ function pintarMuestreo() {
   }).join("");
   $("t-mue").innerHTML = `<h2>Toma de muestras de calidad</h2>
     <p class="nota">Cuatro puntos en el <b>orden del flujo</b>: aguas arriba → vertimiento → zona de mezcla → aguas abajo. Para seguir la <b>misma masa de agua</b>, tome cada muestra después del tiempo de viaje del sitio anterior (nunca antes del primer arribo del ensayo de trazadores). Esta es la bitácora de campo de la campaña <b>${esc(c.nombre)}</b>; las medidas con sonda y los frascos van en sus formatos de campo.</p>
-    <div class="fila">${campo("DF — fracción dispersiva (para calcular el primer arribo)", "muestreo.df", "n", M.df, AY("df", true))}</div>
+    <div class="fila">${campo("DF supuesto — se usa solo si no hay velocidad media y máxima en los sitios", "muestreo.df", "n", M.df, AY("df", true))}</div>
     ${c.puntos.length ? selectorFondo() + '<div id="mapa-caja">' + mapaSVG() + "</div>" : ""}
     ${sit}`;
   document.querySelectorAll("details[data-sitio]").forEach(d => d.addEventListener("toggle", () => { d.open ? ABIERTOS_M.add(d.dataset.sitio) : ABIERTOS_M.delete(d.dataset.sitio); }));
@@ -287,7 +293,7 @@ function combinarMuestreo(a, b) {
   const M = a.muestreo;
   Object.entries(b.sitios || {}).forEach(([k, sb]) => {
     const sa = M.sitios[k]; if (!sa) { M.sitios[k] = sb; n++; return; }
-    ["punto_id", "hora_ini", "hora_fin", "t_viaje_min", "t_origen", "vel_ms", "lluvia24", "q_ls", "metodo_q", "notas"].forEach(x => { if (vacio(sa[x]) && !vacio(sb[x])) { sa[x] = sb[x]; n++; } });
+    ["punto_id", "hora_ini", "hora_fin", "t_viaje_min", "t_origen", "vel_ms", "vmax_ms", "lluvia24", "q_ls", "metodo_q", "notas"].forEach(x => { if (vacio(sa[x]) && !vacio(sb[x])) { sa[x] = sb[x]; n++; } });
     if (sb.mezcla && sa.mezcla && !mezclaCalc(sa.mezcla).listo && mezclaCalc(sb.mezcla).listo) { sa.mezcla = sb.mezcla; n++; }
     (sb.meteo || []).filter(lecturaConDatos).forEach(mb => { if (!(sa.meteo || (sa.meteo = [])).some(m => m.hora === mb.hora)) { sa.meteo.push(mb); n++; } }); sa.meteo.sort((x, y) => (x.hora || "") < (y.hora || "") ? -1 : 1);
   });
@@ -296,8 +302,8 @@ function combinarMuestreo(a, b) {
 function muestreoCsv() {                    // filas para el .csv de «Guardar»: datos del sitio y una fila por lectura hidroclimatológica
   const c = C(); if (!c.muestreo) return []; const M = c.muestreo;
   const L = [[], ["MUESTREO DE CALIDAD"],
-    ["Sitio", "Punto", "Latitud", "Longitud", "Precisión (m)", "Cota (m)", "Inicio", "Fin", "Tiempo de viaje (min)", "Origen del tiempo de viaje", "Intervalo misma masa de agua", "Velocidad media (m/s)", "Lluvia 24 h", "Caudal vertimiento (L/s)", "Método de aforo", "Mezcla: variación (%)", "Mezcla: ¿completa?", "Notas"]];
-  SITIOS_M.forEach(s => { const S = sitioM(s.k), p = punto(S.punto_id) || {}, mz = s.k === "mezcla" ? mezclaCalc(S.mezcla) : null; L.push([s.n.slice(4), p.nombre, p.lat, p.lon, p.acc, p.cota, S.hora_ini, S.hora_fin, S.t_viaje_min, S.t_origen, SITIOS_VENTANA.includes(s.k) && ventanaM(s.k).ini ? horaTxt(ventanaM(s.k).ini).slice(0, 5) + "–" + horaTxt(ventanaM(s.k).fin).slice(0, 5) : "", S.vel_ms, S.lluvia24, S.q_ls, S.metodo_q, mz && mz.listo ? mz.pct.toFixed(1) : "", mz && mz.listo ? (mz.ok ? "sí" : "no") : "", S.notas]); });
+    ["Sitio", "Punto", "Latitud", "Longitud", "Precisión (m)", "Cota (m)", "Inicio", "Fin", "Tiempo de viaje (min)", "Origen del tiempo de viaje", "Intervalo misma masa de agua", "Velocidad media (m/s)", "Velocidad máxima (m/s)", "Lluvia 24 h", "Caudal vertimiento (L/s)", "Método de aforo", "Mezcla: variación (%)", "Mezcla: ¿completa?", "Notas"]];
+  SITIOS_M.forEach(s => { const S = sitioM(s.k), p = punto(S.punto_id) || {}, mz = s.k === "mezcla" ? mezclaCalc(S.mezcla) : null; L.push([s.n.slice(4), p.nombre, p.lat, p.lon, p.acc, p.cota, S.hora_ini, S.hora_fin, S.t_viaje_min, S.t_origen, SITIOS_VENTANA.includes(s.k) && ventanaM(s.k).ini ? horaTxt(ventanaM(s.k).ini).slice(0, 5) + "–" + horaTxt(ventanaM(s.k).fin).slice(0, 5) : "", S.vel_ms, S.vmax_ms, S.lluvia24, S.q_ls, S.metodo_q, mz && mz.listo ? mz.pct.toFixed(1) : "", mz && mz.listo ? (mz.ok ? "sí" : "no") : "", S.notas]); });
   L.push([], ["HIDROCLIMATOLOGÍA", "Fecha", "Sitio", "Hora", "T aire (°C)", "HR (%)", "T rocío (°C)", "Viento (m/s)", "Altura del viento (m)", "Nubosidad (%)", "Sombra (%)", "Radiación (W/m2)"]);
   SITIOS_M.forEach(s => sitioM(s.k).meteo.filter(lecturaConDatos).forEach(m => { const d = rocioM(m.t_aire, m.hr); L.push(["", c.fecha, s.n.slice(4), m.hora, m.t_aire, m.hr, d === null ? "" : d.toFixed(1), m.viento, m.h_viento, m.nub_pct, m.sombra_pct, m.rad]); }));
   return L;
