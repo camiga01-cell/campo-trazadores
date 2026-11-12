@@ -11,6 +11,7 @@ const SITIOS_M = [
 const AYUDA_M = {
   df: ["DF — fracción dispersiva", "Cuánto se ensancha la nube de trazador respecto del tiempo medio: primer arribo = (1 − DF) × tiempo medio. 0,27 es un valor de partida (de tablas del modelo de tiempo de viaje): por confirmar. Si el ensayo midió el primer arribo, el DF sale de ahí en la plataforma.", "Intervalo de muestreo de la misma masa de agua"],
   vel: ["Velocidad media", "En m/s: caudal aforado ÷ área mojada, o el promedio de las velocidades de las verticales del aforo con molinete. Se usa para el tiempo de viaje (distancia ÷ velocidad) y para la longitud de mezcla.", "Tiempo de viaje y longitud de mezcla"],
+  dist_tramo: ["Distancia entre sitios", "Metros por el cauce desde el sitio anterior hasta este (cinta, telémetro o pasos medidos). Solo hace falta si no marcó la ubicación de los dos puntos: con los puntos ubicados la app la calcula sola.", "Tiempo de viaje (distancia ÷ velocidad)"],
   vmax: ["Velocidad máxima", "La mayor velocidad medida en la sección: la de la vertical más rápida del aforo con molinete (m/s). Con la media da el DF = 1 − U/U_máx y de ahí el primer arribo (la masa de agua más rápida), sin procesar el ensayo.", "Intervalo de muestreo de la misma masa de agua"],
   ec_mezcla: ["Conductividad en la sección", "Con la sonda, a la misma profundidad en cada vertical, esperando que la lectura se estabilice. La conductividad es un trazador natural del vertimiento: si es igual de margen a margen, el vertimiento ya se mezcló.", "Verificación de mezcla completa"],
   descarga: ["Descarga en la sección", "Dónde entra el vertimiento al río: en la orilla (caso habitual, descarga lateral) o en el centro del cauce. Cambia el coeficiente de Fischer (0,4 en la orilla, 0,1 en el centro).", "Longitud de mezcla"],
@@ -82,7 +83,7 @@ function mue() {
 function sitioM(k) {
   const M = mue(); if (M.sitios[k]) { const E = M.sitios[k]; if (!E.meteo) E.meteo = []; if (!E.meteo.length && k !== "vertimiento") E.meteo.push(lecturaVacia()); if (k === "mezcla" && !E.mezcla) E.mezcla = mezclaVacia(); if (k === "vertimiento" && E.q_ls === undefined) { E.q_ls = null; E.metodo_q = ""; } return E; }
   const S = SITIOS_M.find(s => s.k === k);
-  return M.sitios[k] = {punto_id: null, hora_ini: "", hora_fin: "", t_viaje_min: null, t_auto: true, t_origen: "", vel_ms: null, vmax_ms: null,
+  return M.sitios[k] = {punto_id: null, hora_ini: "", hora_fin: "", t_viaje_min: null, t_auto: true, t_origen: "", dist_m: null, vel_ms: null, vmax_ms: null,
     meteo: k === "vertimiento" ? [] : [lecturaVacia()], lluvia24: "", notas: "", ...(k === "mezcla" ? {mezcla: mezclaVacia()} : {}), ...(k === "vertimiento" ? {q_ls: null, metodo_q: ""} : {})};
 }
 const horaDe = h => { if (!h) return null; const f = new Date(), [a, b, s] = h.split(":").map(Number); f.setHours(a, b, s || 0, 0); return f; };      // la hora escrita se toma como de hoy
@@ -114,9 +115,13 @@ function posicionHtml(s, S) {              // misma ficha que la pestaña Puntos
     <button class="b g p" data-mreub="${i}" style="margin-top:.3rem">📍 Volver a tomar la ubicación aquí</button></div>`;
 }
 const minDia = h => { if (!h) return null; const [a, b, c] = String(h).split(":").map(Number); return isFinite(a) && isFinite(b) ? a * 60 + b + (c || 0) / 60 : null; };
-function distanciaM(kA, kB) {              // distancia por el recorrido (o en línea recta) entre los puntos de dos sitios
+function distManualM(kA, kB) {            // suma de las distancias escritas a mano entre sitios consecutivos (si están todas)
+  const orden = SITIOS_M.map(x => x.k), i = orden.indexOf(kA), j = orden.indexOf(kB); if (!(j > i)) return null; let suma = 0;
+  for (let x = i + 1; x <= j; x++) { const d = sitioM(orden[x]).dist_m; if (!(d > 0)) return null; suma += d; } return suma;
+}
+function distanciaM(kA, kB) {              // distancia por el recorrido (o en línea recta) entre los puntos de dos sitios; si faltan los puntos, la escrita a mano
   const c = C(), pa = punto(sitioM(kA).punto_id), pb = punto(sitioM(kB).punto_id);
-  if (!pa || !pb || !isFinite(pa.lat) || !isFinite(pb.lat)) return null;
+  if (!pa || !pb || !isFinite(pa.lat) || !isFinite(pb.lat)) { const m = distManualM(kA, kB); return m ? {m, a: null, b: null, origen: "escrita por usted"} : null; }
   const A = abscisas(), ia = c.puntos.indexOf(pa), ib = c.puntos.indexOf(pb);
   if (A[ia] !== null && A[ib] !== null) return {m: Math.abs(A[ib] - A[ia]), a: A[ia], b: A[ib], origen: "por el recorrido entre puntos"};
   return {m: hav([pa.lat, pa.lon], [pb.lat, pb.lon]), a: null, b: null, origen: "en línea recta"};
@@ -170,11 +175,28 @@ function textoVentana(k) {
   const est = dI > 0 ? `Faltan <b>${mmss(dI)}</b> para que abra.` : dF > 0 ? `<b style="color:var(--ok)">AHORA es buen momento</b>: cierra en <b>${mmss(dF)}</b>.` : `<span class="err">El intervalo ya pasó hace ${mmss(-dF)}.</span>`;
   return {html: `${base}<br>${est}`, clase: "nota", V, dI, dF};
 }
+function faltaTiempoM(k) {                  // qué dato falta para que la app calcule sola el tiempo de viaje de este tramo
+  const def = SITIOS_M.find(x => x.k === k), prev = SITIOS_M.find(x => x.k === def.previo), f = [];
+  if (!distanciaM(def.previo, k)) f.push(`la <b>distancia</b> desde «${prev.n.slice(4)}» (ubique los dos puntos o escriba la distancia)`);
+  const ud = kk => sitioM(kk).vel_ms > 0 || (kk === "vertimiento" && sitioM("arriba").vel_ms > 0);
+  if (!ud(def.previo) && !ud(k)) f.push(`la <b>velocidad media</b> de «${prev.n.slice(4)}» o de este sitio`);
+  return f;
+}
+function tiempoHtml(s, S, r, P, sug) {
+  const prev = SITIOS_M.find(x => x.k === s.previo).n.slice(4), auto = S.t_viaje_min > 0 && S.t_origen && S.t_origen !== "escrito a mano", falta = faltaTiempoM(s.k), sinDist = !distanciaM(s.previo, s.k) || (!punto(S.punto_id) || !punto(sitioM(s.previo).punto_id));
+  const resumen = S.t_viaje_min > 0 ? `Tiempo de viaje desde «${esc(prev)}»: <b>${nf(S.t_viaje_min, 1)} min</b> <span class="badge">${esc(S.t_origen || "")}</span>` : `<b>Tiempo de viaje desde «${esc(prev)}»: aún sin calcular.</b>`;
+  const dd = P.D ? ` · distancia ${nf(P.D.m, 0)} m (${esc(P.D.origen)})` : "";
+  return `<div class="nota" style="font-size:.9rem">${resumen}${dd}</div>
+    ${!(S.t_viaje_min > 0) && falta.length ? `<div class="adv">Para que la app lo calcule sola falta: ${falta.join(" y ")}.</div>` : ""}
+    ${sinDist ? `<div class="fila">${campo("Distancia desde «" + prev + "» (m) — solo si no ubicó los puntos", r + ".dist_m", "n", S.dist_m, AY("dist_tramo", true))}</div>` : ""}
+    <details ${S.t_origen === "escrito a mano" || (!(S.t_viaje_min > 0) && falta.length) ? "open" : ""}><summary class="nota">Escribir el tiempo de viaje a mano (opcional)</summary><div class="fila">${campo("Tiempo de viaje (min)", r + ".t_viaje_min", "n", S.t_viaje_min, AY("t_viaje"))}</div></details>
+    <div class="nota" id="sug-${s.k}">${sug ? "" : "Con el tiempo de viaje y la hora de inicio de la primera muestra verá aquí la hora sugerida."}</div>${propuestaHtml(s.k, S, P)}`;
+}
 function propuestaHtml(k, S, P) {
   const o = S.t_origen ? ` <span class="badge">${esc(S.t_origen)}</span>` : "";
   const fila = (x, t, nom) => x ? `<div class="nota">${nom}: <b>${nf(x.min, 1)} min</b> — ${esc(x.fuente)}. <button class="b g p" data-tuse="${k}|${t}">Usar este</button></div>` : "";
   const dif = P.A && P.B ? Math.abs(P.A.min - P.B.min) / P.A.min * 100 : null;
-  return `${o ? `<div class="nota">Valor actual: <b>${nf(S.t_viaje_min, 1)} min</b>${o}</div>` : ""}${fila(P.A, "A", "Con trazadores")}${fila(P.B, "B", "Con las secciones")}${dif !== null && dif > 30 ? `<div class="adv">⚠ Las dos estimaciones difieren ${nf(dif, 0)} %: el ensayo suele dar más tiempo que distancia ÷ velocidad en tramos con pozas. Si el caudal no cambió, prefiera el del ensayo.</div>` : ""}${!P.A && !P.B ? '<div class="nota">Sin datos para estimarlo: registre los picos del ensayo (pestaña Ensayo) o la velocidad media del río en los sitios (aforo), con los puntos ya ubicados. Mientras tanto puede escribirlo.</div>' : ""}${!P.A && P.B ? '<div class="nota">Aún no hay picos del ensayo para este tramo; esta es una estimación aproximada con las secciones.</div>' : ""}`;
+  return `${o ? `<div class="nota">Valor actual: <b>${nf(S.t_viaje_min, 1)} min</b>${o}</div>` : ""}${fila(P.A, "A", "Con trazadores")}${fila(P.B, "B", "Con las secciones")}${dif !== null && dif > 30 ? `<div class="adv">⚠ Las dos estimaciones difieren ${nf(dif, 0)} %: el ensayo suele dar más tiempo que distancia ÷ velocidad en tramos con pozas. Si el caudal no cambió, prefiera el del ensayo.</div>` : ""}${!P.A && P.B ? '<div class="nota">Aún no hay picos del ensayo para este tramo; esta es una estimación aproximada con las secciones.</div>' : ""}`;
 }
 function distVertM(S) {                    // distancia por el recorrido (o en línea recta) entre el punto del vertimiento y el de este sitio
   return distanciaM("vertimiento", "mezcla");
@@ -228,7 +250,7 @@ function pintarMuestreo() {
       <p class="nota">${s.d}</p>
       ${posicionHtml(s, S)}
       <h2 style="font-size:.95rem">Hora de la toma</h2>
-      ${s.previo ? `<div class="fila">${campo("Tiempo de viaje desde «" + SITIOS_M.find(x => x.k === s.previo).n.slice(4) + "» (min)", r + ".t_viaje_min", "n", S.t_viaje_min, AY("t_viaje"))}</div><div class="nota" id="sug-${s.k}">${sug ? "" : "Con el tiempo de viaje y la hora de inicio del sitio anterior verá aquí la hora sugerida."}</div>${propuestaHtml(s.k, S, PT[s.k])}` : '<p class="nota">Este sitio marca el arranque: las horas de los demás se calculan desde su hora de inicio.</p>'}
+      ${s.previo ? tiempoHtml(s, S, r, PT[s.k], sug) : '<p class="nota">Este sitio marca el arranque: las horas de los demás se calculan desde su hora de inicio.</p>'}
       ${s.k !== "vertimiento" ? `<div class="fila">${campo("Velocidad media en la sección (m/s) — del aforo", r + ".vel_ms", "n", S.vel_ms, AY("vel", true))}${campo("Velocidad máxima en la sección (m/s)", r + ".vmax_ms", "n", S.vmax_ms, AY("vmax", true))}</div>${S.vel_ms > 0 && S.vmax_ms > 0 && S.vmax_ms <= S.vel_ms ? '<div class="adv">⚠ La velocidad máxima debe ser mayor que la media: revise.</div>' : ""}` : ""}
       <div class="fila">${campo("Inicio de la toma", r + ".hora_ini", "h", S.hora_ini, 'data-re="1"')}${campo("Fin de la toma", r + ".hora_fin", "h", S.hora_fin)}</div>
       <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin:.3rem 0"><button class="b g p" data-ahoram="${s.k}|hora_ini">Empecé ahora</button><button class="b g p" data-ahoram="${s.k}|hora_fin">Terminé ahora</button></div>
@@ -293,7 +315,7 @@ function combinarMuestreo(a, b) {
   const M = a.muestreo;
   Object.entries(b.sitios || {}).forEach(([k, sb]) => {
     const sa = M.sitios[k]; if (!sa) { M.sitios[k] = sb; n++; return; }
-    ["punto_id", "hora_ini", "hora_fin", "t_viaje_min", "t_origen", "vel_ms", "vmax_ms", "lluvia24", "q_ls", "metodo_q", "notas"].forEach(x => { if (vacio(sa[x]) && !vacio(sb[x])) { sa[x] = sb[x]; n++; } });
+    ["punto_id", "hora_ini", "hora_fin", "t_viaje_min", "t_origen", "dist_m", "vel_ms", "vmax_ms", "lluvia24", "q_ls", "metodo_q", "notas"].forEach(x => { if (vacio(sa[x]) && !vacio(sb[x])) { sa[x] = sb[x]; n++; } });
     if (sb.mezcla && sa.mezcla && !mezclaCalc(sa.mezcla).listo && mezclaCalc(sb.mezcla).listo) { sa.mezcla = sb.mezcla; n++; }
     (sb.meteo || []).filter(lecturaConDatos).forEach(mb => { if (!(sa.meteo || (sa.meteo = [])).some(m => m.hora === mb.hora)) { sa.meteo.push(mb); n++; } }); sa.meteo.sort((x, y) => (x.hora || "") < (y.hora || "") ? -1 : 1);
   });
