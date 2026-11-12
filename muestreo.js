@@ -3,14 +3,18 @@
 // (zona de mezcla) y aguas abajo de la zona de mezcla. Usa el estado, el GPS, las fotos y el respaldo de app.js.
 const SITIOS_M = [
   {k: "arriba", previo: null, n: "1 · Aguas arriba del vertimiento", cod: "AA", corto: "Muestreo aguas arriba", d: "Agua del río SIN influencia del vertimiento (la calidad de fondo). Lo más cerca posible aguas arriba de la descarga."},
-  {k: "mezcla", previo: "arriba", n: "2 · Aguas abajo del vertimiento (zona de mezcla)", cod: "ZM", corto: "Muestreo zona de mezcla", d: "Donde el vertimiento ya quedó mezclado con el río de lado a lado. Confirme la mezcla (conductividad igual en margen izquierda, centro y margen derecha)."},
-  {k: "abajo", previo: "mezcla", n: "3 · Aguas abajo de la zona de mezcla", cod: "AB", corto: "Muestreo aguas abajo", d: "Más allá de la zona de mezcla, para ver cómo cambia la calidad en el tramo."}
-,
-  {k: "vertimiento", previo: "arriba", rol: "vertimiento", n: "4 · Vertimiento (efluente)", cod: "VT", corto: "Muestreo vertimiento", d: "La descarga que llega al río. La CAR pide muestrearla de manera simple, con aforo de caudal, coordenadas y hora, y de forma concordante con el monitoreo del río: tómela cuando pase por la descarga la masa de agua que viene siguiendo desde aguas arriba."}
+  {k: "vertimiento", previo: "arriba", rol: "vertimiento", n: "2 · Vertimiento (efluente)", cod: "VT", corto: "Muestreo vertimiento", d: "La descarga que llega al río. La CAR pide muestrearla de manera simple, con aforo de caudal, coordenadas y hora, y de forma concordante con el monitoreo del río: tómela cuando pase por la descarga la masa de agua que viene siguiendo desde aguas arriba."},
+  {k: "mezcla", previo: "vertimiento", n: "3 · Aguas abajo del vertimiento (zona de mezcla)", cod: "ZM", corto: "Muestreo zona de mezcla", d: "Donde el vertimiento ya quedó mezclado con el río de lado a lado. Confirme la mezcla (conductividad igual en margen izquierda, centro y margen derecha)."},
+  {k: "abajo", previo: "mezcla", n: "4 · Aguas abajo de la zona de mezcla", cod: "AB", corto: "Muestreo aguas abajo", d: "Más allá de la zona de mezcla, para ver cómo cambia la calidad en el tramo."}
 ];
 // Guía que aparece al tocar un campo: qué se espera que se anote y a qué hoja del modelo QUAL2K alimenta
 const AYUDA_M = {
   ec_mezcla: ["Conductividad en la sección", "Con la sonda, a la misma profundidad en cada vertical, esperando que la lectura se estabilice. La conductividad es un trazador natural del vertimiento: si es igual de margen a margen, el vertimiento ya se mezcló.", "Verificación de mezcla completa"],
+  descarga: ["Descarga en la sección", "Dónde entra el vertimiento al río: en la orilla (caso habitual, descarga lateral) o en el centro del cauce. Cambia el coeficiente de Fischer (0,4 en la orilla, 0,1 en el centro).", "Longitud de mezcla"],
+  ancho: ["Ancho del río", "En metros, el ancho del espejo de agua en la sección del punto de mezcla, medido con cinta o telémetro.", "Longitud de mezcla (W)"],
+  prof: ["Profundidad media", "En metros: promedio de las profundidades medidas en la sección (o área mojada ÷ ancho).", "Longitud de mezcla (H)"],
+  vel: ["Velocidad media", "En m/s: caudal aforado ÷ área mojada, o la del aforo con molinete. Debe ser la misma que usa el modelo hidráulico.", "Longitud de mezcla (U)"],
+  pend: ["Pendiente", "Pendiente longitudinal del tramo en m/m (cota arriba − cota abajo) ÷ distancia por el cauce. Si ya anotó las cotas de los puntos, la app la calcula y la puede dejar vacía.", "Longitud de mezcla (S)"],
   dist_mezcla: ["Distancia desde la descarga", "Metros, por el cauce, entre el punto de descarga y la sección donde mide. Compárela con la longitud de mezcla calculada (Fischer).", "Verificación de mezcla completa"],
   tol_mezcla: ["Tolerancia de mezcla", "Variación máxima aceptada de la conductividad entre márgenes y centro, en % del promedio. 5 % es un valor de partida: por confirmar con el criterio de su protocolo o del laboratorio.", "Verificación de mezcla completa"],
   ec_ref: ["Conductividad del vertimiento y del río arriba", "Léalas con la misma sonda. Sirven para saber si la conductividad distingue el vertimiento del río: si son casi iguales, la prueba no sirve y debe usar otro trazador.", "Verificación de mezcla completa"],
@@ -50,7 +54,18 @@ let ABIERTOS_M = new Set(["arriba"]);
 
 const lecturaVacia = (u) => ({hora: horaTxt(new Date()).slice(0, 5), t_aire: null, hr: null, viento: null, h_viento: u ? u.h_viento : null, nub_pct: null, sombra_pct: u ? u.sombra_pct : null, rad: null});
 const lecturaConDatos = m => ["t_aire", "hr", "viento", "nub_pct", "sombra_pct", "rad"].some(k => m[k] !== null && m[k] !== undefined && m[k] !== "");
-const mezclaVacia = () => ({dist_m: null, tol_pct: 5, ec_vert: null, ec_arriba: null, verticales: [{pos: "Margen izquierda", ec: null}, {pos: "Centro", ec: null}, {pos: "Margen derecha", ec: null}]});
+const mezclaVacia = () => ({descarga: "orilla", ancho_m: null, prof_m: null, vel_ms: null, pend: null, dist_m: null, tol_pct: 5, ec_vert: null, ec_arriba: null, verticales: [{pos: "Margen izquierda", ec: null}, {pos: "Centro", ec: null}, {pos: "Margen derecha", ec: null}]});
+function fischerM(S, Z) {                  // longitud de mezcla (Fischer et al. 1979): Lm = c·U·W²/Et; Et = α·H·U*; U* = √(g·H·S); c = 0,4 (descarga en la orilla) o 0,1 (en el centro)
+  const W = Z.ancho_m, H = Z.prof_m, U = Z.vel_ms; let Sp = Z.pend, origenS = "escrita";
+  if (!(Sp > 0)) { const q = pendienteVert(S); if (q) { Sp = q.s; origenS = "de las cotas de los puntos"; } }
+  if (!(W > 0 && H > 0 && U > 0 && Sp > 0)) return null;
+  const alfa = C().params.alpha_t > 0 ? C().params.alpha_t : 0.6, coef = Z.descarga === "centro" ? 0.1 : 0.4, us = Math.sqrt(G * H * Sp), et = alfa * H * us;
+  return {Lm: coef * U * W * W / et, us, et, alfa, coef, S: Sp, origenS};
+}
+function pendienteVert(S) {
+  const c = C(), pv = punto(sitioM("vertimiento").punto_id), pm = punto(S.punto_id); if (!pv || !pm) return null;
+  const iv = c.puntos.indexOf(pv), im = c.puntos.indexOf(pm); if (!(im > iv)) return null; const q = pendienteEntre(iv, im); return q && q.s > 0 ? q : null;
+}
 function mezclaCalc(Z) {                    // variación de la conductividad en la sección: (máx − mín) / promedio
   if (!Z) return null; const v = Z.verticales.map(x => x.ec).filter(x => x !== null && x !== undefined && isFinite(x) && x > 0);
   if (v.length < 3) return {n: v.length, listo: false};
@@ -93,7 +108,7 @@ function posicionHtml(s, S) {              // misma ficha que la pestaña Puntos
     <div class="fila" style="margin-top:.4rem">${campo("Nombre", `puntos.${i}.nombre`, "t", p.nombre, 'data-re="1"')}${campo("Latitud", `puntos.${i}.lat`, "n", p.lat, 'data-re="1"')}${campo("Longitud", `puntos.${i}.lon`, "n", p.lon, 'data-re="1"')}${campo("Precisión GPS (m)", `puntos.${i}.acc`, "n", p.acc)}${campo("Cota (m s. n. m.)", `puntos.${i}.cota`, "n", p.cota, AY("cota", true) + ' placeholder="para la pendiente"')}</div>
     ${p.alt_gps != null ? `<div class="nota">Altitud medida por el GPS: <b>${nf(p.alt_gps, 0)} m</b>${p.alt_acc && p.alt_acc < 99 ? " (±" + nf(p.alt_acc, 0) + " m)" : ""}. El GPS da la altura con un error de 10 a 30 m: <b>no sirve para la pendiente de tramos cortos</b>. ${p.cota_origen === "gps" ? "<b>Ya se usa como cota</b>: si tiene una medida mejor, escríbala arriba." : `<button class="b g p" data-musaralt="${i}">Usar como cota</button>`}</div>` : ""}
     ${campo("Notas del punto", `puntos.${i}.notas`, "t", p.notas)}
-    <div class="nota">${A[i] === null ? "" : "Abscisa desde el primer punto: <b>" + nf(A[i], 0) + " m</b>"}${i ? ` · desde el punto anterior: <b>${nf(L[i - 1].d, 0)} m</b> (${L[i - 1].origen})` : ""}${p.rol === "muestreo" ? ". Este punto quedó al final de la lista: si va entre otros puntos del río, ordénelo con ↑ ↓ en la pestaña Puntos." : ""}</div>
+    <div class="nota">${A[i] === null ? "" : "Abscisa desde el primer punto: <b>" + nf(A[i], 0) + " m</b>"}${i ? ` · desde el punto anterior: <b>${nf(L[i - 1].d, 0)} m</b> (${L[i - 1].origen})` : ""}${p.rol === "muestreo" ? ". Se insertó en la lista de Puntos en el orden del río, entre los demás sitios de muestreo; si hay puntos del ensayo de trazadores en medio, revise el orden con ↑ ↓ en la pestaña Puntos." : ""}</div>
     <button class="b g p" data-mreub="${i}" style="margin-top:.3rem">📍 Volver a tomar la ubicación aquí</button></div>`;
 }
 function distVertM(S) {                    // distancia por el recorrido (o en línea recta) entre el punto del vertimiento y el de este sitio
@@ -107,9 +122,17 @@ function mezclaHtml(S, r) {
   const Z = S.mezcla, z = r + ".mezcla", D = distVertM(S), pv = punto(sitioM("vertimiento").punto_id);
   if (D && (Z.dist_m === null || Z.dist_m === undefined || Z.dist_auto)) { Z.dist_m = Math.round(D.m); Z.dist_auto = true; }
   const C2 = mezclaCalc(Z);
-  return `<h2 style="font-size:.95rem">Verificación de mezcla completa</h2>
+  const F = fischerM(S, Z), pend0 = pendienteVert(S);
+  const ubic = `<h2 style="font-size:.95rem">1 · ¿Está bien ubicado este punto? (longitud de mezcla)</h2>
+    <p class="nota">La longitud de mezcla (Fischer) dice a qué distancia de la descarga el vertimiento se mezcla de orilla a orilla. Este punto debe quedar <b>a esa distancia o más</b> aguas abajo. Escriba el ancho, la profundidad y la velocidad del río en esta sección (las del aforo).</p>
+    <div class="fila"><label>Descarga del vertimiento en la sección<select data-r="${z}.descarga" data-re="1" ${AY("descarga")}><option value="orilla"${Z.descarga !== "centro" ? " selected" : ""}>en la orilla (lateral)</option><option value="centro"${Z.descarga === "centro" ? " selected" : ""}>en el centro del cauce</option></select></label>
+      ${campo("Ancho del río (m)", z + ".ancho_m", "n", Z.ancho_m, AY("ancho", true))}${campo("Profundidad media (m)", z + ".prof_m", "n", Z.prof_m, AY("prof", true))}${campo("Velocidad media (m/s)", z + ".vel_ms", "n", Z.vel_ms, AY("vel", true))}${campo("Pendiente (m/m)", z + ".pend", "n", Z.pend, AY("pend", true) + (pend0 ? ` placeholder="de las cotas: ${nf(pend0.s, 4)}"` : ""))}</div>
+    ${!F ? '<div class="nota">Complete ancho, profundidad, velocidad y pendiente para calcular la longitud de mezcla.</div>' : (() => { const D2 = D ? D.m : (Z.dist_m > 0 ? Z.dist_m : null), falta = D2 === null ? null : F.Lm - D2;
+      return `<div class="card" style="border-width:2px;border-color:${falta === null ? "var(--bd)" : falta <= 0 ? "var(--ok)" : "var(--ro)"}"><b>Longitud de mezcla (Fischer): ${nf(F.Lm, 0)} m</b>${D2 === null ? '<div class="nota">Ubique el punto del vertimiento y este sitio para comparar con la distancia real.</div>' : falta <= 0 ? `<div class="nota">✔ Distancia real desde la descarga: <b>${nf(D2, 0)} m</b> ≥ ${nf(F.Lm, 0)} m. La posición del punto es correcta.</div>` : `<div class="nota"><b style="color:var(--ro)">✗ Distancia real: ${nf(D2, 0)} m &lt; ${nf(F.Lm, 0)} m.</b> El punto está muy cerca: <b>desplácelo al menos ${nf(falta, 0)} m aguas abajo</b> (hasta ≥ ${nf(F.Lm, 0)} m de la descarga) y vuelva a marcar su ubicación.</div>`}
+        <div class="nota">U* = ${nf(F.us, 3)} m/s · Et = ${nf(F.et, 4)} m²/s · coeficiente ${F.coef} (${Z.descarga === "centro" ? "centro" : "orilla"}) · α = ${nf(F.alfa, 2)} (por confirmar) · pendiente ${nf(F.S, 4)} (${F.origenS}).</div></div>`; })()}`;
+  return ubic + `<h2 style="font-size:.95rem">2 · ¿Ya se mezcló? (conductividad)</h2>
     <p class="nota">El vertimiento ya se mezcló cuando la conductividad (trazador natural del vertimiento) es la misma de margen a margen. Antes de tomar la muestra, mida la conductividad con la sonda en <b>al menos 3 puntos de la sección</b> (margen izquierda, centro y margen derecha, a la misma profundidad). Si varía más que la tolerancia, avance aguas abajo y repita.</p>
-    <div class="nota">Vertimiento: <b>${pv ? esc(pv.nombre) : "sin ubicar"}</b>${D ? ` · distancia calculada hasta este sitio: <b>${nf(D.m, 0)} m</b> (${D.origen}).` : ". Marque primero la ubicación del vertimiento (sitio 4) y la de este sitio para calcular la distancia."}</div>
+    <div class="nota">Vertimiento: <b>${pv ? esc(pv.nombre) : "sin ubicar"}</b>${D ? ` · distancia calculada hasta este sitio: <b>${nf(D.m, 0)} m</b> (${D.origen}).` : ". Marque primero la ubicación del vertimiento (sitio 2) y la de este sitio para calcular la distancia."}</div>
     <div class="fila">${campo("Distancia desde la descarga (m)", z + ".dist_m", "n", Z.dist_m, AY("dist_mezcla"))}${campo("Tolerancia de variación (%) — por confirmar", z + ".tol_pct", "n", Z.tol_pct, AY("tol_mezcla", true))}</div>
     ${Z.verticales.map((v, i) => `<div class="fila" style="margin-top:.3rem">${campo("Punto de la sección", `${z}.verticales.${i}.pos`, "t", v.pos)}${campo("Conductividad (µS/cm)", `${z}.verticales.${i}.ec`, "n", v.ec, AY("ec_mezcla", true))}${i > 2 ? `<button class="b g p" data-mzdel="${i}" style="align-self:flex-end">Quitar</button>` : ""}</div>`).join("")}
     <div style="margin:.3rem 0"><button class="b g p" data-mzadd="1">+ Otro punto de la sección</button></div>
@@ -151,12 +174,15 @@ function pintarMuestreo() {
       ${campo("Notas de este sitio", r + ".notas", "t", S.notas)}</details>`;
   }).join("");
   $("t-mue").innerHTML = `<h2>Toma de muestras de calidad</h2>
-    <p class="nota">Tres sitios del río, en este orden. Para seguir la <b>misma masa de agua</b>, tome cada muestra después del tiempo de viaje del sitio anterior (nunca antes del primer arribo del ensayo de trazadores). Esta es la bitácora de campo de la campaña <b>${esc(c.nombre)}</b>; las medidas con sonda y los frascos van en sus formatos de campo.</p>
+    <p class="nota">Cuatro puntos en el <b>orden del flujo</b>: aguas arriba → vertimiento → zona de mezcla → aguas abajo. Para seguir la <b>misma masa de agua</b>, tome cada muestra después del tiempo de viaje del sitio anterior (nunca antes del primer arribo del ensayo de trazadores). Esta es la bitácora de campo de la campaña <b>${esc(c.nombre)}</b>; las medidas con sonda y los frascos van en sus formatos de campo.</p>
     ${c.puntos.length ? selectorFondo() + '<div id="mapa-caja">' + mapaSVG() + "</div>" : ""}
     ${sit}`;
   document.querySelectorAll("details[data-sitio]").forEach(d => d.addEventListener("toggle", () => { d.open ? ABIERTOS_M.add(d.dataset.sitio) : ABIERTOS_M.delete(d.dataset.sitio); }));
   document.querySelectorAll("[data-pm]").forEach(sl => sl.onchange = () => { sitioM(sl.dataset.pm).punto_id = sl.value || null; guardar(); pintarMuestreo(); });
-  const crear = (k, lat, lon, acc, alt, altAcc) => { const s = SITIOS_M.find(x => x.k === k); const p = {id: pid(), nombre: s.corto, rol: s.rol || "muestreo", lat, lon, acc: acc === null ? null : Math.round(acc), alt_gps: alt ?? null, alt_acc: altAcc ?? null, cota: alt != null ? Math.round(alt * 10) / 10 : null, cota_origen: alt != null ? "gps" : null, hora_iso: new Date().toISOString(), notas: "", hid: {}}; c.puntos.push(p); sitioM(k).punto_id = p.id; guardar(); pintarMuestreo(); };
+  const crear = (k, lat, lon, acc, alt, altAcc) => { const s = SITIOS_M.find(x => x.k === k); const p = {id: pid(), nombre: s.corto, rol: s.rol || "muestreo", lat, lon, acc: acc === null ? null : Math.round(acc), alt_gps: alt ?? null, alt_acc: altAcc ?? null, cota: alt != null ? Math.round(alt * 10) / 10 : null, cota_origen: alt != null ? "gps" : null, hora_iso: new Date().toISOString(), notas: "", hid: {}}; let pos = -1; const orden = SITIOS_M.map(x => x.k), idx = orden.indexOf(k);
+    for (let j = idx - 1; j >= 0 && pos < 0; j--) { const q = punto(sitioM(orden[j]).punto_id), ii = q ? c.puntos.indexOf(q) : -1; if (ii >= 0) pos = ii + 1; }
+    for (let j = idx + 1; j < orden.length && pos < 0; j++) { const q = punto(sitioM(orden[j]).punto_id), ii = q ? c.puntos.indexOf(q) : -1; if (ii >= 0) pos = ii; }
+    if (pos < 0) c.puntos.push(p); else c.puntos.splice(pos, 0, p); sitioM(k).punto_id = p.id; guardar(); pintarMuestreo(); };
   document.querySelectorAll("[data-mnuevo]").forEach(b => b.onclick = async () => {
     const [k, modo] = b.dataset.mnuevo.split("|");
     if (modo === "man") { const t = prompt("Latitud, longitud en grados decimales (p. ej. 4.53596, -74.54319):"); if (!t) return; const m = parseCoord(t); if (!m || Math.abs(m[0]) > 90 || Math.abs(m[1]) > 180) return alert("No se entendió. Escriba: latitud, longitud (p. ej. 4.53596, -74.54319)."); return crear(k, m[0], m[1], null); }
