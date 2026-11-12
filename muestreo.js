@@ -9,6 +9,7 @@ const SITIOS_M = [
 ];
 // Guía que aparece al tocar un campo: qué se espera que se anote y a qué hoja del modelo QUAL2K alimenta
 const AYUDA_M = {
+  df: ["DF — fracción dispersiva", "Cuánto se ensancha la nube de trazador respecto del tiempo medio: primer arribo = (1 − DF) × tiempo medio. 0,27 es un valor de partida (de tablas del modelo de tiempo de viaje): por confirmar. Si el ensayo midió el primer arribo, el DF sale de ahí en la plataforma.", "Intervalo de muestreo de la misma masa de agua"],
   ec_mezcla: ["Conductividad en la sección", "Con la sonda, a la misma profundidad en cada vertical, esperando que la lectura se estabilice. La conductividad es un trazador natural del vertimiento: si es igual de margen a margen, el vertimiento ya se mezcló.", "Verificación de mezcla completa"],
   descarga: ["Descarga en la sección", "Dónde entra el vertimiento al río: en la orilla (caso habitual, descarga lateral) o en el centro del cauce. Cambia el coeficiente de Fischer (0,4 en la orilla, 0,1 en el centro).", "Longitud de mezcla"],
   ancho: ["Ancho del río", "En metros, el ancho del espejo de agua en la sección del punto de mezcla, medido con cinta o telémetro.", "Longitud de mezcla (W)"],
@@ -83,7 +84,7 @@ function sitioM(k) {
   return M.sitios[k] = {punto_id: null, hora_ini: "", hora_fin: "", t_viaje_min: null, t_auto: true, t_origen: "", vel_ms: null,
     meteo: k === "vertimiento" ? [] : [lecturaVacia()], lluvia24: "", notas: "", ...(k === "mezcla" ? {mezcla: mezclaVacia()} : {}), ...(k === "vertimiento" ? {q_ls: null, metodo_q: ""} : {})};
 }
-const horaDe = (h, c = C()) => { if (!h) return null; const f = new Date((c.fecha || new Date().toISOString().slice(0, 10)) + "T00:00:00"), [a, b, s] = h.split(":").map(Number); f.setHours(a, b, s || 0, 0); return f; };
+const horaDe = h => { if (!h) return null; const f = new Date(), [a, b, s] = h.split(":").map(Number); f.setHours(a, b, s || 0, 0); return f; };      // la hora escrita se toma como de hoy
 function sugeridaM(k) {                     // hora para seguir la misma masa de agua: hora de toma en el sitio previo + tiempo de viaje hasta este
   const def = SITIOS_M.find(x => x.k === k); if (!def.previo) return null;
   const S = sitioM(k), P = sitioM(def.previo), f = horaDe(P.hora_ini); if (!f || !(S.t_viaje_min > 0)) return null;
@@ -124,9 +125,9 @@ function tiemposEnsayo() {                 // referencias del ensayo de trazador
   c.puntos.forEach((p, i) => { if (A[i] === null) return; const t = p.rol === "inyeccion" ? minDia(c.inyeccion && c.inyeccion.hora) : minDia((c.registros[p.id] || {}).pico); if (t !== null) R.push({a: A[i], t, nombre: p.nombre}); });
   R.sort((x, y) => x.a - y.a); return R;
 }
-function propT(k) {                        // A: con el ensayo de trazadores; B: distancia ÷ velocidad de las secciones aforadas
-  const def = SITIOS_M.find(x => x.k === k); if (!def.previo) return {};
-  const D = distanciaM(def.previo, k), out = {};
+function propT(k) { const def = SITIOS_M.find(x => x.k === k); return def.previo ? propEntre(def.previo, k) : {}; }
+function propEntre(kA, kB) {               // A: con el ensayo de trazadores; B: distancia ÷ velocidad de las secciones aforadas
+  const D = distanciaM(kA, kB), out = {};
   if (D && D.a !== null) {
     const R = tiemposEnsayo(); let ok = R.length >= 2;
     for (let i = 1; i < R.length; i++) if (!(R[i].t > R[i - 1].t && R[i].a > R[i - 1].a)) ok = false;
@@ -137,9 +138,31 @@ function propT(k) {                        // A: con el ensayo de trazadores; B:
     }
   }
   const ud = (kk) => { const e = SITIOS_M.find(x => x.k === kk); return sitioM(kk).vel_ms > 0 ? sitioM(kk).vel_ms : (kk === "vertimiento" ? sitioM("arriba").vel_ms : null); };
-  const ua = ud(def.previo), ub = ud(k), us = [ua, ub].filter(v => v > 0);
+  const ua = ud(kA), ub = ud(kB), us = [ua, ub].filter(v => v > 0);
   if (D && us.length) { const u = us.reduce((x, y) => x + y, 0) / us.length; out.B = {min: D.m / u / 60, fuente: `${nf(D.m, 0)} m ÷ ${nf(u, 2)} m/s (${us.length === 2 ? "promedio de las dos secciones" : "una sola sección aforada"})`}; }
   out.D = D; return out;
+}
+const SITIOS_VENTANA = ["mezcla", "abajo"];          // el vertimiento no lleva ventana: se toma cuando la masa de agua pasa por la descarga
+function acumM(k) {                         // tiempo medio de viaje (min) desde aguas arriba hasta el sitio k: suma de los tramos, o estimación directa si falta alguno
+  const orden = SITIOS_M.map(x => x.k), n = orden.indexOf(k); let suma = 0, completo = true;
+  for (const j of orden.slice(1, n + 1)) { const tv = sitioM(j).t_viaje_min; if (tv > 0) suma += tv; else { completo = false; break; } }
+  if (completo && suma > 0) return suma;
+  const P = propEntre("arriba", k), m = P.A || P.B; return m ? m.min : null;
+}
+function ventanaM(k) {                      // Guía Nacional: entre el primer arribo (nunca antes) y el tiempo medio de viaje, contados desde la hora de la primera muestra
+  const f0 = horaDe(sitioM("arriba").hora_ini); if (!f0) return {falta: "Anote la hora de inicio de la toma en «Aguas arriba» (la primera muestra) para ver el intervalo."};
+  const t = acumM(k); if (!(t > 0)) return {falta: "Falta el tiempo de viaje desde aguas arriba: registre los picos del ensayo, la velocidad de los sitios o escríbalo en cada sitio."};
+  const df = mue().df >= 0 && mue().df < 1 ? mue().df : 0.27, tau = (1 - df) * t;
+  return {ini: new Date(f0.getTime() + tau * 60000), fin: new Date(f0.getTime() + t * 60000), tau, t, df};
+}
+function textoVentana(k) {
+  const V = ventanaM(k); if (V.falta) return {html: V.falta, clase: "nota", V};
+  const S = sitioM(k), ahora = Date.now(), hh = f => horaTxt(f).slice(0, 5), rango = `<b>${hh(V.ini)} – ${hh(V.fin)}</b>`;
+  const base = `Intervalo para muestrear la <b>misma masa de agua</b>: ${rango} <span class="nota">(a +${nf(V.tau, 1)} min el primer arribo y a +${nf(V.t, 1)} min el tiempo medio, desde la primera muestra; DF = ${nf(V.df, 2)})</span>`;
+  if (S.hora_ini) { const h = horaDe(S.hora_ini), d = h >= V.ini && h <= V.fin; return {html: `${base}<br>${d ? "✔ Su toma de las " + S.hora_ini.slice(0, 5) + " está dentro del intervalo." : '<span class="err">⚠ Su toma de las ' + S.hora_ini.slice(0, 5) + (h < V.ini ? " fue antes del primer arribo: no corresponde a la misma masa de agua." : " fue después del tiempo medio: la masa de agua ya pasó.") + "</span>"}`, clase: "nota", V}; }
+  const dI = (V.ini.getTime() - ahora) / 1000, dF = (V.fin.getTime() - ahora) / 1000;
+  const est = dI > 0 ? `Faltan <b>${mmss(dI)}</b> para que abra.` : dF > 0 ? `<b style="color:var(--ok)">AHORA es buen momento</b>: cierra en <b>${mmss(dF)}</b>.` : `<span class="err">El intervalo ya pasó hace ${mmss(-dF)}.</span>`;
+  return {html: `${base}<br>${est}`, clase: "nota", V, dI, dF};
 }
 function propuestaHtml(k, S, P) {
   const o = S.t_origen ? ` <span class="badge">${esc(S.t_origen)}</span>` : "";
@@ -190,7 +213,7 @@ function meteoHtml(s, S, r, MA) {
       <div class="fila">${campo("Lluvia en las últimas 24 h", r + ".lluvia24", "t", S.lluvia24, AY("lluvia24"))}</div>`;
 }
 function pintarMuestreo() {
-  const c = C(), M = mue(), PT = {};
+  const c = C(), M = mue(), PT = {}; if (M.df === undefined) M.df = 0.27;
   SITIOS_M.forEach(s => { if (!s.previo) return; const S = sitioM(s.k), P = PT[s.k] = propT(s.k), mejor = P.A || P.B;
     if (S.t_auto !== false && mejor) { S.t_viaje_min = Math.round(mejor.min * 10) / 10; S.t_origen = P.A ? "calculado con trazadores" : "calculado con las secciones"; } });
   const sit = SITIOS_M.map(s => {
@@ -210,6 +233,7 @@ function pintarMuestreo() {
   }).join("");
   $("t-mue").innerHTML = `<h2>Toma de muestras de calidad</h2>
     <p class="nota">Cuatro puntos en el <b>orden del flujo</b>: aguas arriba → vertimiento → zona de mezcla → aguas abajo. Para seguir la <b>misma masa de agua</b>, tome cada muestra después del tiempo de viaje del sitio anterior (nunca antes del primer arribo del ensayo de trazadores). Esta es la bitácora de campo de la campaña <b>${esc(c.nombre)}</b>; las medidas con sonda y los frascos van en sus formatos de campo.</p>
+    <div class="fila">${campo("DF — fracción dispersiva (para calcular el primer arribo)", "muestreo.df", "n", M.df, AY("df", true))}</div>
     ${c.puntos.length ? selectorFondo() + '<div id="mapa-caja">' + mapaSVG() + "</div>" : ""}
     ${sit}`;
   document.querySelectorAll("details[data-sitio]").forEach(d => d.addEventListener("toggle", () => { d.open ? ABIERTOS_M.add(d.dataset.sitio) : ABIERTOS_M.delete(d.dataset.sitio); }));
@@ -235,6 +259,11 @@ function pintarMuestreo() {
 function actualizarMuestreo() {            // cada segundo: cuenta regresiva de la hora sugerida y aviso con sonido 2 min antes
   const M = mue(); M.avisos = M.avisos || {};
   SITIOS_M.forEach(s => {
+    if (SITIOS_VENTANA.includes(s.k)) {
+      const T = textoVentana(s.k), e = enAct("sug-" + s.k) || $("sug-" + s.k); if (e) e.innerHTML = `<div class="card" style="margin:.3rem 0;border-left:5px solid ${T.dI > 0 || !T.V.ini ? "var(--az)" : T.dF > 0 ? "var(--ok)" : "var(--ro)"}">${T.html}</div>`;
+      if (T.V.ini && !sitioM(s.k).hora_ini && T.dI <= 120 && T.dF > 0 && !M.avisos[s.k]) { M.avisos[s.k] = true; guardar(true); avisar(`${T.dI > 0 ? "En " + Math.ceil(T.dI / 60) + " min abre" : "Ya abrió"} el intervalo para muestrear «${s.n.slice(4)}»`); }
+      return;
+    }
     const f = sugeridaM(s.k), e = $("sug-" + s.k); if (!f) return;
     const dt = (f.getTime() - Date.now()) / 1000, S = sitioM(s.k), hecho = !!S.hora_ini;
     if (e) e.innerHTML = hecho ? `Sugerida: <b>${horaTxt(f)}</b> (ya inició a las ${S.hora_ini.slice(0, 8)}).` : dt > 0 ? `Hora sugerida para seguir la misma masa de agua: <b>${horaTxt(f)}</b> — faltan <b>${mmss(dt)}</b>` : `Hora sugerida: <b>${horaTxt(f)}</b> — <span class="err">hace ${mmss(-dt)}</span>`;
@@ -246,10 +275,10 @@ setInterval(() => { if (TAB === "mue") actualizarMuestreo(); else if (document.v
 // ---- exportación y combinación (las usa app.js)
 function muestreoExport() {
   const c = C(); if (!c.muestreo) return null; const M = c.muestreo;
-  return {sitios: SITIOS_M.map(s => { const S = sitioM(s.k), p = punto(S.punto_id); return {clave: s.k, nombre: s.n.slice(4), ...S, punto: p ? p.nombre : null}; })};
+  return {df: M.df, sitios: SITIOS_M.map(s => { const S = sitioM(s.k), p = punto(S.punto_id); return {clave: s.k, nombre: s.n.slice(4), ...S, punto: p ? p.nombre : null}; })};
 }
 function muestreoImport(m) {
-  if (!m) return undefined; const M = {sitios: {}};
+  if (!m) return undefined; const M = {df: m.df, sitios: {}};
   (m.sitios || []).forEach(s => { const {clave, nombre, punto: _p, ...r} = s; M.sitios[clave] = r; }); return M;
 }
 function combinarMuestreo(a, b) {
@@ -267,8 +296,8 @@ function combinarMuestreo(a, b) {
 function muestreoCsv() {                    // filas para el .csv de «Guardar»: datos del sitio y una fila por lectura hidroclimatológica
   const c = C(); if (!c.muestreo) return []; const M = c.muestreo;
   const L = [[], ["MUESTREO DE CALIDAD"],
-    ["Sitio", "Punto", "Latitud", "Longitud", "Precisión (m)", "Cota (m)", "Inicio", "Fin", "Tiempo de viaje (min)", "Origen del tiempo de viaje", "Velocidad media (m/s)", "Lluvia 24 h", "Caudal vertimiento (L/s)", "Método de aforo", "Mezcla: variación (%)", "Mezcla: ¿completa?", "Notas"]];
-  SITIOS_M.forEach(s => { const S = sitioM(s.k), p = punto(S.punto_id) || {}, mz = s.k === "mezcla" ? mezclaCalc(S.mezcla) : null; L.push([s.n.slice(4), p.nombre, p.lat, p.lon, p.acc, p.cota, S.hora_ini, S.hora_fin, S.t_viaje_min, S.t_origen, S.vel_ms, S.lluvia24, S.q_ls, S.metodo_q, mz && mz.listo ? mz.pct.toFixed(1) : "", mz && mz.listo ? (mz.ok ? "sí" : "no") : "", S.notas]); });
+    ["Sitio", "Punto", "Latitud", "Longitud", "Precisión (m)", "Cota (m)", "Inicio", "Fin", "Tiempo de viaje (min)", "Origen del tiempo de viaje", "Intervalo misma masa de agua", "Velocidad media (m/s)", "Lluvia 24 h", "Caudal vertimiento (L/s)", "Método de aforo", "Mezcla: variación (%)", "Mezcla: ¿completa?", "Notas"]];
+  SITIOS_M.forEach(s => { const S = sitioM(s.k), p = punto(S.punto_id) || {}, mz = s.k === "mezcla" ? mezclaCalc(S.mezcla) : null; L.push([s.n.slice(4), p.nombre, p.lat, p.lon, p.acc, p.cota, S.hora_ini, S.hora_fin, S.t_viaje_min, S.t_origen, SITIOS_VENTANA.includes(s.k) && ventanaM(s.k).ini ? horaTxt(ventanaM(s.k).ini).slice(0, 5) + "–" + horaTxt(ventanaM(s.k).fin).slice(0, 5) : "", S.vel_ms, S.lluvia24, S.q_ls, S.metodo_q, mz && mz.listo ? mz.pct.toFixed(1) : "", mz && mz.listo ? (mz.ok ? "sí" : "no") : "", S.notas]); });
   L.push([], ["HIDROCLIMATOLOGÍA", "Fecha", "Sitio", "Hora", "T aire (°C)", "HR (%)", "T rocío (°C)", "Viento (m/s)", "Altura del viento (m)", "Nubosidad (%)", "Sombra (%)", "Radiación (W/m2)"]);
   SITIOS_M.forEach(s => sitioM(s.k).meteo.filter(lecturaConDatos).forEach(m => { const d = rocioM(m.t_aire, m.hr); L.push(["", c.fecha, s.n.slice(4), m.hora, m.t_aire, m.hr, d === null ? "" : d.toFixed(1), m.viento, m.h_viento, m.nub_pct, m.sombra_pct, m.rad]); }));
   return L;

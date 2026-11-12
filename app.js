@@ -756,7 +756,7 @@ function pintarGuardar() {
 }
 
 // ------------------------------------------------------------------ arranque
-const APP_VERSION = "campo-v32";
+const APP_VERSION = "campo-v33";
 if ("serviceWorker" in navigator) {
   const habiaControl = !!navigator.serviceWorker.controller; let recargado = false;
   navigator.serviceWorker.addEventListener("controllerchange", () => { if (!habiaControl || recargado || REC) return; recargado = true; location.reload(); });      // versión nueva lista: recarga (los datos están en el teléfono; no se recarga a mitad de un recorrido)
