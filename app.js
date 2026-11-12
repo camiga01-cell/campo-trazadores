@@ -139,7 +139,7 @@ document.querySelectorAll("#nav button").forEach(b => b.onclick = () => { TAB = 
 function mostrar() {
   document.querySelectorAll("#nav button").forEach(x => x.classList.toggle("on", x.dataset.t === TAB));
   document.querySelectorAll("main section").forEach(s => s.classList.toggle("on", s.id === "t-" + TAB));
-  ({pun: pintarPuntos, rec: pintarRecorrido, prog: pintarProg, camp: pintarCampana, mue: () => pintarMuestreo(), exp: pintarGuardar})[TAB](); pintarResp();
+  ({pun: pintarPuntos, rec: pintarRecorrido, prog: pintarProg, camp: pintarCampana, mue: () => pintarMuestreo(), exp: pintarGuardar})[TAB](); if (!REC) refreshMapa(); pintarResp();
 }
 function pintarCabecera() {
   $("sel-camp").innerHTML = DB.campanas.map(c => `<option value="${c.id}"${c.id === DB.activa ? " selected" : ""}>${esc(c.nombre)}</option>`).join("") + '<option value="__nueva">+ Nueva campaña…</option>';
@@ -175,11 +175,13 @@ function zMaxEsri(cx, cy) {
   }
   return 17;
 }
-function refreshMapa() { const el = $("mapa-caja") || $("rec-mapa"); if (el) el.innerHTML = mapaSVG(); }
+// Las pestañas comparten los mismos ids y las ocultas conservan su contenido: se busca siempre dentro de la pestaña visible
+const enAct = id => document.querySelector("section.on #" + id);
+function refreshMapa() { const el = enAct("mapa-caja") || enAct("rec-mapa"); if (el) el.innerHTML = mapaSVG(); }
 document.addEventListener("click", ev => { const id = ev.target.id; if (!["mz-menos", "mz-mas", "mz-ajustar"].includes(id)) return; const k = DB.ajustes.zoomMapa || 0; DB.ajustes.zoomMapa = id === "mz-mas" ? Math.min(6, k + 1) : id === "mz-menos" ? Math.max(-4, k - 1) : 0; guardar(); refreshMapa(); });
 let FALLAS = 0;
-function fondoFalla() { FALLAS++; const n = $("mapa-nota"); if (n) n.textContent = "⚠ No cargó el fondo del mapa: revise la conexión a internet, o cambie a «Sin fondo». (Sin internet solo se ven los puntos y recorridos.)"; }
-function fondoOk() { const n = $("mapa-nota"); if (n && FALLAS) { FALLAS = 0; n.textContent = ""; } }
+function fondoFalla() { FALLAS++; const n = enAct("mapa-nota"); if (n) n.textContent = "⚠ No cargó el fondo del mapa: revise la conexión a internet, o cambie a «Sin fondo». (Sin internet solo se ven los puntos y recorridos.)"; }
+function fondoOk() { const n = enAct("mapa-nota"); if (n && FALLAS) { FALLAS = 0; n.textContent = ""; } }
 function selectorFondo() { return `<label style="margin:.3rem 0">Fondo del mapa<select id="mapa-fondo"><option value="ninguno">Sin fondo (funciona sin internet)</option>${Object.entries(FONDOS).map(([k, f]) => `<option value="${k}"${DB.ajustes.fondo === k ? " selected" : ""}>${f.t}</option>`).join("")}</select></label><div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;margin:.3rem 0"><button class="b g p" id="mz-menos" aria-label="Alejar">−</button><button class="b g p" id="mz-mas" aria-label="Acercar">+</button><button class="b g p" id="mz-ajustar">Ajustar a los puntos</button><span class="nota" id="mapa-info"></span></div><div class="nota" id="mapa-nota">${DB.ajustes.fondo !== "ninguno" && navigator.onLine === false ? "⚠ Sin internet: no se ve el fondo, solo los puntos y recorridos." : ""}</div>`; }
 document.addEventListener("change", ev => { if (ev.target.id === "mapa-fondo") { DB.ajustes.fondo = ev.target.value; guardar(); refreshMapa(); } });
 function mapaSVG() {
@@ -211,7 +213,7 @@ function mapaSVG() {
   s += `<rect x="8" y="${H - 34}" width="${bw + 16}" height="26" rx="4" fill="#fff" opacity=".85"/><line x1="16" y1="${H - 14}" x2="${16 + bw}" y2="${H - 14}" stroke="#1d2433" stroke-width="2.5"/><text x="16" y="${H - 19}" style="font-size:11px;fill:#1d2433">${barra >= 1000 ? barra / 1000 + " km" : barra + " m"}</text>`;
   s += `<g><rect x="${W - 34}" y="8" width="26" height="26" rx="4" fill="#fff" opacity=".85"/><text x="${W - 21}" y="28" text-anchor="middle" style="font-size:16px;font-weight:700;fill:#1d2433">N</text></g>`;
   if (fondo) s += `<text x="${W - 6}" y="${H - 6}" text-anchor="end" style="font-size:10px;paint-order:stroke;stroke:#fff;stroke-width:3px;fill:#333">${fondo.atr}</text>`;
-  const inf = $("mapa-info"); if (inf) inf.textContent = (fondo ? MAPA_INFO : "") + ((DB.ajustes.zoomMapa || 0) ? " · zoom " + (DB.ajustes.zoomMapa > 0 ? "+" : "") + DB.ajustes.zoomMapa : "");
+  const inf = enAct("mapa-info"); if (inf) inf.textContent = (fondo ? MAPA_INFO : "") + ((DB.ajustes.zoomMapa || 0) ? " · zoom " + (DB.ajustes.zoomMapa > 0 ? "+" : "") + DB.ajustes.zoomMapa : "");
   return s + "</svg>";
 }
 
@@ -754,7 +756,7 @@ function pintarGuardar() {
 }
 
 // ------------------------------------------------------------------ arranque
-const APP_VERSION = "campo-v31";
+const APP_VERSION = "campo-v32";
 if ("serviceWorker" in navigator) {
   const habiaControl = !!navigator.serviceWorker.controller; let recargado = false;
   navigator.serviceWorker.addEventListener("controllerchange", () => { if (!habiaControl || recargado || REC) return; recargado = true; location.reload(); });      // versión nueva lista: recarga (los datos están en el teléfono; no se recarga a mitad de un recorrido)
