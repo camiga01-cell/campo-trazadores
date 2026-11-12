@@ -40,15 +40,17 @@ function avisosMeteo(S) {
 }
 let ABIERTOS_M = new Set(["arriba"]);
 
+const lecturaVacia = (u) => ({hora: horaTxt(new Date()).slice(0, 5), t_aire: null, hr: null, viento: null, h_viento: u ? u.h_viento : null, nub_pct: null, sombra_pct: u ? u.sombra_pct : null, rad: null});
+const lecturaConDatos = m => ["t_aire", "hr", "viento", "nub_pct", "sombra_pct", "rad"].some(k => m[k] !== null && m[k] !== undefined && m[k] !== "");
 function mue() {
   const c = C(); if (!c.muestreo) c.muestreo = {equipo: "", serie: "", calib: "", sitios: {}};
   return c.muestreo;
 }
 function sitioM(k) {
-  const M = mue(); if (M.sitios[k]) { const E = M.sitios[k]; if (!E.meteo) E.meteo = []; return E; }
+  const M = mue(); if (M.sitios[k]) { const E = M.sitios[k]; if (!E.meteo) E.meteo = []; if (!E.meteo.length) E.meteo.push(lecturaVacia()); return E; }
   const S = SITIOS_M.find(s => s.k === k);
   return M.sitios[k] = {punto_id: null, hora_ini: "", hora_fin: "", t_viaje_min: null,
-    meteo: [], lluvia24: "", notas: ""};
+    meteo: [lecturaVacia()], lluvia24: "", notas: ""};
 }
 const horaDe = (h, c = C()) => { if (!h) return null; const f = new Date((c.fecha || new Date().toISOString().slice(0, 10)) + "T00:00:00"), [a, b, s] = h.split(":").map(Number); f.setHours(a, b, s || 0, 0); return f; };
 function sugeridaM(k) {                     // hora para seguir la misma masa de agua: hora de toma en el sitio anterior + tiempo de viaje hasta este
@@ -92,7 +94,11 @@ function pintarMuestreo() {
       ${W.length ? `<div class="adv">⚠ ${W.join(" · ")}</div>` : ""}
       <h2 style="font-size:.95rem">Condiciones hidroclimatológicas (entradas del modelo QUAL2K)</h2>
       <p class="nota">El modelo tiene una hoja por variable y por hora: <b>Air Temperature, Dew Point Temperature, Wind Speed, Cloud Cover, Shade y Solar</b>. Anote una lectura al tomar la muestra y repítala cada hora mientras dure el muestreo; deben corresponder a la fecha y hora de la toma. <b>Toque un campo para ver qué se espera que anote.</b></p>
-      ${S.meteo.length ? `<div class="scroll"><table><thead><tr><th>Hora</th><th>T aire °C</th><th>HR %</th><th>T rocío °C</th><th>Viento m/s</th><th>Altura m</th><th>Nubes %</th><th>Sombra %</th><th>Rad. W/m²</th><th></th></tr></thead><tbody>${S.meteo.map((m, i) => `<tr><td>${inp(`${r}.meteo.${i}.hora`, "h", m.hora, 'data-re="1"')}</td><td>${inp(`${r}.meteo.${i}.t_aire`, "n", m.t_aire, AY("t_aire", true))}</td><td>${inp(`${r}.meteo.${i}.hr`, "n", m.hr, AY("hr", true))}</td><td><b>${rocioM(m.t_aire, m.hr) === null ? "—" : nf(rocioM(m.t_aire, m.hr), 1)}</b></td><td>${inp(`${r}.meteo.${i}.viento`, "n", m.viento, AY("viento", true))}</td><td>${inp(`${r}.meteo.${i}.h_viento`, "n", m.h_viento, AY("h_viento"))}</td><td>${inp(`${r}.meteo.${i}.nub_pct`, "n", m.nub_pct, AY("nub_pct", true))}</td><td>${inp(`${r}.meteo.${i}.sombra_pct`, "n", m.sombra_pct, AY("sombra", true))}</td><td>${inp(`${r}.meteo.${i}.rad`, "n", m.rad, AY("rad"))}</td><td><button class="b g p" data-medel="${s.k}|${i}">✕</button></td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${S.meteo.map((m, i) => `<div class="card" style="background:#fafbfd"><div class="pt"><b>Lectura ${i + 1}</b><button class="b g p" data-medel="${s.k}|${i}">Quitar</button></div>
+        <div class="fila" style="margin-top:.3rem">${campo("Hora", `${r}.meteo.${i}.hora`, "h", m.hora, 'data-re="1"')}${campo("Temperatura del aire (°C)", `${r}.meteo.${i}.t_aire`, "n", m.t_aire, AY("t_aire", true))}${campo("Humedad relativa (%)", `${r}.meteo.${i}.hr`, "n", m.hr, AY("hr", true))}
+        ${campo("Velocidad del viento (m/s)", `${r}.meteo.${i}.viento`, "n", m.viento, AY("viento", true))}${campo("Altura del anemómetro (m)", `${r}.meteo.${i}.h_viento`, "n", m.h_viento, AY("h_viento"))}${campo("Cobertura de nubes (%)", `${r}.meteo.${i}.nub_pct`, "n", m.nub_pct, AY("nub_pct", true))}
+        ${campo("Sombra sobre el cauce (%)", `${r}.meteo.${i}.sombra_pct`, "n", m.sombra_pct, AY("sombra", true))}${campo("Radiación solar (W/m²) — opcional", `${r}.meteo.${i}.rad`, "n", m.rad, AY("rad"))}</div>
+        <div class="nota">Temperatura de rocío (calculada): <b>${rocioM(m.t_aire, m.hr) === null ? "— (falta temperatura o humedad)" : nf(rocioM(m.t_aire, m.hr), 1) + " °C"}</b></div></div>`).join("")}
       <div style="margin:.3rem 0"><button class="b g p" data-meadd="${s.k}">+ Lectura ahora</button></div>
       ${MA.length ? `<div class="adv">⚠ ${MA.join(" · ")}</div>` : ""}
       <p class="nota">La temperatura de rocío la calcula la app con la temperatura y la humedad (fórmula de Magnus). El viento se anota a la altura a la que se midió; el modelo lo pide a 7 m y se ajusta al armar el modelo (por confirmar).</p>
@@ -115,7 +121,7 @@ function pintarMuestreo() {
   document.querySelectorAll("[data-mreub]").forEach(b => b.onclick = async () => { try { b.disabled = true; b.textContent = "Midiendo… quédese quieto"; const r = await fijarPunto(DB.ajustes.seg_promedio), p = c.puntos[+b.dataset.mreub]; p.lat = r.lat; p.lon = r.lon; p.acc = Math.round(r.acc); p.alt_gps = r.alt; p.alt_acc = r.altAcc; if (r.alt != null && p.cota_origen !== "manual") { p.cota = Math.round(r.alt * 10) / 10; p.cota_origen = "gps"; } guardar(); pintarMuestreo(); } catch (e) { alert(e.message); pintarMuestreo(); } });
   document.querySelectorAll("[data-musaralt]").forEach(b => b.onclick = () => { const p = c.puntos[+b.dataset.musaralt]; p.cota = Math.round(p.alt_gps * 10) / 10; p.cota_origen = "gps"; guardar(); pintarMuestreo(); });
   document.querySelectorAll("[data-ahoram]").forEach(b => b.onclick = () => { const [k, campoH] = b.dataset.ahoram.split("|"), S = sitioM(k); S[campoH] = horaTxt(new Date()); const s = SITIOS_M.find(x => x.k === k); evento((campoH === "hora_ini" ? "Inicio de toma de muestra en " : "Fin de toma de muestra en ") + s.n.slice(4)); pintarMuestreo(); });
-  document.querySelectorAll("[data-meadd]").forEach(b => b.onclick = () => { const S = sitioM(b.dataset.meadd), u = S.meteo[S.meteo.length - 1]; S.meteo.push({hora: horaTxt(new Date()).slice(0, 5), t_aire: null, hr: null, viento: null, h_viento: u ? u.h_viento : null, nub_pct: null, sombra_pct: u ? u.sombra_pct : null, rad: null}); guardar(); pintarMuestreo(); });
+  document.querySelectorAll("[data-meadd]").forEach(b => b.onclick = () => { const S = sitioM(b.dataset.meadd), u = S.meteo[S.meteo.length - 1]; S.meteo.push(lecturaVacia(u)); guardar(); pintarMuestreo(); });
   document.querySelectorAll("[data-medel]").forEach(b => b.onclick = () => { const [k, n] = b.dataset.medel.split("|"); sitioM(k).meteo.splice(+n, 1); guardar(); pintarMuestreo(); });
   actualizarMuestreo();
 }
@@ -147,7 +153,7 @@ function combinarMuestreo(a, b) {
   Object.entries(b.sitios || {}).forEach(([k, sb]) => {
     const sa = M.sitios[k]; if (!sa) { M.sitios[k] = sb; n++; return; }
     ["punto_id", "hora_ini", "hora_fin", "t_viaje_min", "lluvia24", "notas"].forEach(x => { if (vacio(sa[x]) && !vacio(sb[x])) { sa[x] = sb[x]; n++; } });
-    (sb.meteo || []).forEach(mb => { if (!(sa.meteo || (sa.meteo = [])).some(m => m.hora === mb.hora)) { sa.meteo.push(mb); n++; } }); sa.meteo.sort((x, y) => (x.hora || "") < (y.hora || "") ? -1 : 1);
+    (sb.meteo || []).filter(lecturaConDatos).forEach(mb => { if (!(sa.meteo || (sa.meteo = [])).some(m => m.hora === mb.hora)) { sa.meteo.push(mb); n++; } }); sa.meteo.sort((x, y) => (x.hora || "") < (y.hora || "") ? -1 : 1);
   });
   return n;
 }
@@ -157,6 +163,6 @@ function muestreoCsv() {                    // filas para el .csv de «Guardar»
     ["Sitio", "Punto", "Latitud", "Longitud", "Precisión (m)", "Cota (m)", "Inicio", "Fin", "Tiempo de viaje (min)", "Lluvia 24 h", "Notas"]];
   SITIOS_M.forEach(s => { const S = sitioM(s.k), p = punto(S.punto_id) || {}; L.push([s.n.slice(4), p.nombre, p.lat, p.lon, p.acc, p.cota, S.hora_ini, S.hora_fin, S.t_viaje_min, S.lluvia24, S.notas]); });
   L.push([], ["HIDROCLIMATOLOGÍA", "Fecha", "Sitio", "Hora", "T aire (°C)", "HR (%)", "T rocío (°C)", "Viento (m/s)", "Altura del viento (m)", "Nubosidad (%)", "Sombra (%)", "Radiación (W/m2)"]);
-  SITIOS_M.forEach(s => sitioM(s.k).meteo.forEach(m => { const d = rocioM(m.t_aire, m.hr); L.push(["", c.fecha, s.n.slice(4), m.hora, m.t_aire, m.hr, d === null ? "" : d.toFixed(1), m.viento, m.h_viento, m.nub_pct, m.sombra_pct, m.rad]); }));
+  SITIOS_M.forEach(s => sitioM(s.k).meteo.filter(lecturaConDatos).forEach(m => { const d = rocioM(m.t_aire, m.hr); L.push(["", c.fecha, s.n.slice(4), m.hora, m.t_aire, m.hr, d === null ? "" : d.toFixed(1), m.viento, m.h_viento, m.nub_pct, m.sombra_pct, m.rad]); }));
   return L;
 }
