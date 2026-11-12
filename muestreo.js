@@ -96,10 +96,20 @@ function posicionHtml(s, S) {              // misma ficha que la pestaña Puntos
     <div class="nota">${A[i] === null ? "" : "Abscisa desde el primer punto: <b>" + nf(A[i], 0) + " m</b>"}${i ? ` · desde el punto anterior: <b>${nf(L[i - 1].d, 0)} m</b> (${L[i - 1].origen})` : ""}${p.rol === "muestreo" ? ". Este punto quedó al final de la lista: si va entre otros puntos del río, ordénelo con ↑ ↓ en la pestaña Puntos." : ""}</div>
     <button class="b g p" data-mreub="${i}" style="margin-top:.3rem">📍 Volver a tomar la ubicación aquí</button></div>`;
 }
+function distVertM(S) {                    // distancia por el recorrido (o en línea recta) entre el punto del vertimiento y el de este sitio
+  const c = C(), pv = punto(sitioM("vertimiento").punto_id), pm = punto(S.punto_id);
+  if (!pv || !pm || !isFinite(pv.lat) || !isFinite(pm.lat)) return null;
+  const A = abscisas(), iv = c.puntos.indexOf(pv), im = c.puntos.indexOf(pm);
+  if (A[iv] !== null && A[im] !== null) return {m: Math.abs(A[im] - A[iv]), origen: "por el recorrido entre puntos"};
+  return {m: hav([pv.lat, pv.lon], [pm.lat, pm.lon]), origen: "en línea recta"};
+}
 function mezclaHtml(S, r) {
-  const Z = S.mezcla, C2 = mezclaCalc(Z), z = r + ".mezcla";
+  const Z = S.mezcla, z = r + ".mezcla", D = distVertM(S), pv = punto(sitioM("vertimiento").punto_id);
+  if (D && (Z.dist_m === null || Z.dist_m === undefined || Z.dist_auto)) { Z.dist_m = Math.round(D.m); Z.dist_auto = true; }
+  const C2 = mezclaCalc(Z);
   return `<h2 style="font-size:.95rem">Verificación de mezcla completa</h2>
     <p class="nota">El vertimiento ya se mezcló cuando la conductividad (trazador natural del vertimiento) es la misma de margen a margen. Antes de tomar la muestra, mida la conductividad con la sonda en <b>al menos 3 puntos de la sección</b> (margen izquierda, centro y margen derecha, a la misma profundidad). Si varía más que la tolerancia, avance aguas abajo y repita.</p>
+    <div class="nota">Vertimiento: <b>${pv ? esc(pv.nombre) : "sin ubicar"}</b>${D ? ` · distancia calculada hasta este sitio: <b>${nf(D.m, 0)} m</b> (${D.origen}).` : ". Marque primero la ubicación del vertimiento (sitio 4) y la de este sitio para calcular la distancia."}</div>
     <div class="fila">${campo("Distancia desde la descarga (m)", z + ".dist_m", "n", Z.dist_m, AY("dist_mezcla"))}${campo("Tolerancia de variación (%) — por confirmar", z + ".tol_pct", "n", Z.tol_pct, AY("tol_mezcla", true))}</div>
     ${Z.verticales.map((v, i) => `<div class="fila" style="margin-top:.3rem">${campo("Punto de la sección", `${z}.verticales.${i}.pos`, "t", v.pos)}${campo("Conductividad (µS/cm)", `${z}.verticales.${i}.ec`, "n", v.ec, AY("ec_mezcla", true))}${i > 2 ? `<button class="b g p" data-mzdel="${i}" style="align-self:flex-end">Quitar</button>` : ""}</div>`).join("")}
     <div style="margin:.3rem 0"><button class="b g p" data-mzadd="1">+ Otro punto de la sección</button></div>
@@ -201,3 +211,4 @@ function muestreoCsv() {                    // filas para el .csv de «Guardar»
   SITIOS_M.forEach(s => sitioM(s.k).meteo.filter(lecturaConDatos).forEach(m => { const d = rocioM(m.t_aire, m.hr); L.push(["", c.fecha, s.n.slice(4), m.hora, m.t_aire, m.hr, d === null ? "" : d.toFixed(1), m.viento, m.h_viento, m.nub_pct, m.sombra_pct, m.rad]); }));
   return L;
 }
+document.addEventListener("change", ev => { const r = ev.target.dataset && ev.target.dataset.r; if (r && /\.mezcla\.dist_m$/.test(r)) { const Z = sitioM("mezcla").mezcla; Z.dist_auto = false; guardar(); } });
