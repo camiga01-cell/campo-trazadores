@@ -289,33 +289,92 @@ function pintarRecorrido() {
   el.innerHTML = REC ? `<div class="card rec"><b>● Grabando el recorrido</b><div id="rec-vivo">${vivo()}</div>
       <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem"><button class="b" id="rec-marca" style="flex:2">📍 Marcar punto aquí (cierra el tramo)</button><button class="b r" id="rec-stop" style="flex:1">■ Detener</button></div></div>${selectorFondo()}<div id="rec-mapa">${mapaSVG()}</div>` :
     `<p class="nota">Camine por la orilla <b>siguiendo el cauce</b> de un punto al siguiente con el GPS grabando: la distancia del tramo es la longitud de lo caminado. Mantenga la pantalla encendida (la app la protege del apagado mientras graba) y la app abierta.</p>
-    <div class="card"><div class="fila"><label>Empezar en el punto${c.puntos.length ? sel("rec-ini") : "<select disabled><option>(marque un punto primero)</option></select>"}</label></div>
-    <button class="b" id="rec-go" style="width:100%;margin-top:.5rem" ${c.puntos.length ? "" : "disabled"}>● Iniciar recorrido</button></div>
+    <div class="card"><b>Iniciar el recorrido donde esté parado</b><p class="nota">Puede empezar en cualquier lugar: al iniciar, la app le pregunta si ese lugar es alguno de los puntos ya marcados o si hay que marcarlo como punto nuevo (del ensayo de trazadores, de muestreo o de ambos). Durante el recorrido use «Marcar punto aquí» cada vez que llegue a un punto.</p>
+    <button class="b" id="rec-go" style="width:100%;margin-top:.5rem">● Iniciar recorrido</button></div>
     <h2>Mapa</h2>${selectorFondo()}<div id="mapa-caja">${mapaSVG()}</div><h2>Distancias entre puntos</h2>${tabla}
     <p class="nota">La distancia por GPS suele sobreestimar un poco el camino en tramos cortos (ruido de ±3 a ±10 m). Para tramos muy cortos mida con cinta o escriba la distancia en la última columna; esa prevalece.</p>`;
-  if ($("rec-go")) $("rec-go").onclick = () => { const p = punto($("rec-ini").value); if (!iniciarGPS()) return; REC = {de: p.id, pts: [[p.lat, p.lon, Date.now(), 0]], t0: Date.now()}; pintarRecorrido(); };
+  if ($("rec-go")) $("rec-go").onclick = () => { if (!iniciarGPS()) return; REC = {de: null, pts: ULT && Date.now() - ULT.t < 20000 ? [[ULT.lat, ULT.lon, Date.now(), Math.round(ULT.acc), ULT.alt ?? null]] : [], t0: Date.now()}; pintarRecorrido(); preguntarInicio(false); };
   if ($("rec-marca")) $("rec-marca").onclick = marcarEnRecorrido;
   if ($("rec-stop")) $("rec-stop").onclick = detenerRecorrido;
   el.querySelectorAll("[data-man]").forEach(i => i.onchange = () => { const t = c.tramos.find(x => x.id === i.dataset.man); t.manual_m = num(i.value) > 0 ? num(i.value) : null; guardar(); pintarRecorrido(); });
 }
 function vivo() { const d = longitud(REC.pts), s = Math.floor((Date.now() - REC.t0) / 1000); return `<div class="kpi" style="margin-top:.4rem"><div><span class="nota">Distancia del tramo</span><b>${nf(d, 0)} m</b></div><div><span class="nota">Lecturas</span><b>${REC.pts.length}</b></div><div><span class="nota">Tiempo</span><b>${pad(Math.floor(s / 60))}:${pad(s % 60)}</b></div></div><p class="nota">${ULT ? "GPS ±" + Math.round(ULT.acc) + " m" + (ULT.acc > DB.ajustes.acc_max ? " — precisión baja: no se están guardando lecturas" : "") : "Esperando señal…"}</p>`; }
 function cerrarTramo(aId) { const c = C(), pts = REC.pts.slice(); const p = punto(aId); if (p) pts.push([p.lat, p.lon, Date.now(), 0]); c.tramos.push({id: "t" + Date.now().toString(36), de: REC.de, a: aId, pts, dist_m: longitud(pts), manual_m: null}); }
+// Ventana para asignar un punto recién marcado: ensayo de trazadores (va en «Puntos»), muestreo de calidad (va en «Muestreo») o ambos
+function modalAsignar(o) {
+  return new Promise(res => {
+    const sitios = typeof SITIOS_M !== "undefined" ? SITIOS_M : [], v = document.createElement("div");
+    v.style.cssText = "position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:1rem;overflow:auto";
+    const chk = "flex-direction:row;align-items:center;gap:.5rem;color:#1d2433;font-size:.95rem;margin-top:.4rem";
+    v.innerHTML = `<div style="background:#fff;border-radius:.7rem;padding:1rem;max-width:26rem;width:100%"><b>${esc(o.titulo)}</b>
+      <label style="margin-top:.5rem">Nombre del punto<input id="am-nom" type="text" value="${esc(o.nombre)}"></label>
+      <p class="nota" style="margin-top:.6rem"><b>¿Para qué es este punto?</b> Puede ser para las dos cosas.</p>
+      <label style="${chk}"><input id="am-t" type="checkbox" style="width:auto" checked> Ensayo de trazadores (queda en «Puntos»)</label>
+      <label id="am-tl" style="margin-left:1.6rem">Función en el ensayo<select id="am-trol">${ROLES.filter(r => r[0] !== "muestreo").map(([k, t]) => `<option value="${k}"${k === (o.rol || "monitoreo") ? " selected" : ""}>${t}</option>`).join("")}</select></label>
+      ${sitios.length ? `<label style="${chk}"><input id="am-m" type="checkbox" style="width:auto"> Muestreo de calidad (queda en «Muestreo»)</label>
+      <label id="am-ml" style="margin-left:1.6rem;display:none">Sitio de muestreo<select id="am-msel">${sitios.map(x => `<option value="${x.k}">${esc(x.n)}${punto(sitioM(x.k).punto_id) ? " (ya tiene punto)" : ""}</option>`).join("")}</select></label>` : ""}
+      <div style="display:flex;gap:.5rem;margin-top:.8rem"><button class="b" id="am-ok" style="flex:1">Aceptar</button><button class="b g" id="am-no" style="flex:1">${esc(o.cancelar || "Cancelar")}</button></div></div>`;
+    document.body.appendChild(v);
+    const q = id => v.querySelector("#" + id), alt = () => { q("am-tl").style.display = q("am-t").checked ? "" : "none"; if (q("am-m")) q("am-ml").style.display = q("am-m").checked ? "" : "none"; };
+    v.addEventListener("change", alt);
+    q("am-no").onclick = () => { v.remove(); res(null); };
+    q("am-ok").onclick = () => {
+      const t = q("am-t").checked, m = q("am-m") ? q("am-m").checked : false; if (!t && !m) return alert("Elija para qué es el punto: ensayo de trazadores, muestreo o ambos.");
+      const r = {nombre: q("am-nom").value.trim() || o.nombre, traz: t ? q("am-trol").value : null, mue: m ? q("am-msel").value : null};
+      if (r.mue && punto(sitioM(r.mue).punto_id) && !confirm("Ese sitio de muestreo ya tiene un punto asignado («" + punto(sitioM(r.mue).punto_id).nombre + "»). ¿Reemplazarlo por este?")) return;
+      v.remove(); res(r);
+    };
+  });
+}
+function crearPuntoAsignado(f, d, despuesDe) {          // f: posición {lat, lon, acc, alt, altAcc}; d: resultado de modalAsignar; despuesDe: id del punto tras el cual se inserta (si no, al final)
+  const c = C(), rol = d.traz || (d.mue === "vertimiento" ? "vertimiento" : "muestreo");
+  const p = {id: pid(), nombre: d.nombre, rol, lat: f.lat, lon: f.lon, acc: f.acc == null ? null : Math.round(f.acc), alt_gps: f.alt ?? null, alt_acc: f.altAcc ?? null, cota: f.alt != null ? Math.round(f.alt * 10) / 10 : null, cota_origen: f.alt != null ? "gps" : null, hora_iso: new Date().toISOString(), notas: "", hid: {}};
+  const i = despuesDe ? c.puntos.findIndex(x => x.id === despuesDe) : -1;
+  if (i >= 0) c.puntos.splice(i + 1, 0, p); else c.puntos.push(p);
+  if (d.mue && typeof sitioM === "function") sitioM(d.mue).punto_id = p.id;
+  guardar(); return p;
+}
+// Al iniciar (o al marcar el primer punto, o al detener) pregunta si el inicio del recorrido corresponde a algún punto
+function preguntarInicio(obligatoria) {
+  return new Promise(res => {
+    const c = C(), v = document.createElement("div"), dameIni = () => REC && REC.pts[0] ? {lat: REC.pts[0][0], lon: REC.pts[0][1], acc: REC.pts[0][3] || null, alt: REC.pts[0][4] ?? null} : (ULT ? {lat: ULT.lat, lon: ULT.lon, acc: Math.round(ULT.acc), alt: ULT.alt ?? null, altAcc: ULT.altAcc ?? null} : null), ini0 = dameIni();
+    v.style.cssText = "position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:1rem;overflow:auto";
+    v.innerHTML = `<div style="background:#fff;border-radius:.7rem;padding:1rem;max-width:26rem;width:100%"><b>¿El inicio del recorrido corresponde a algún punto?</b>
+      <p class="nota">Está empezando en su ubicación actual${ini0 && ini0.acc ? " (±" + ini0.acc + " m)" : ""}.</p>
+      ${c.puntos.length ? `<label>Es un punto ya marcado<select id="pi-sel">${c.puntos.map((p, k) => `<option value="${p.id}">${k + 1}. ${esc(p.nombre)}</option>`).join("")}</select></label><button class="b" id="pi-si" style="width:100%;margin-top:.4rem">Sí, es ese punto</button>` : ""}
+      <button class="b ${c.puntos.length ? "g" : ""}" id="pi-nuevo" style="width:100%;margin-top:.4rem">No: marcar un punto nuevo aquí</button>
+      <button class="b g" id="pi-luego" style="width:100%;margin-top:.4rem">${obligatoria ? "Cancelar" : "Decidir después"}</button></div>`;
+    document.body.appendChild(v); const q = id => v.querySelector("#" + id), fin = ok => { v.remove(); res(ok); };
+    if (q("pi-si")) q("pi-si").onclick = () => { const p = punto(q("pi-sel").value); REC.de = p.id; REC.pts[0] = [p.lat, p.lon, Date.now(), 0]; fin(true); };
+    q("pi-nuevo").onclick = async () => {
+      const ini = dameIni(); if (!ini) { alert("Aún no hay señal del GPS: espere un momento e intente de nuevo."); return; }
+      v.style.display = "none"; const d = await modalAsignar({titulo: "Punto de inicio del recorrido", nombre: "Punto " + (c.puntos.length + 1)});
+      if (!d) { v.style.display = "flex"; return; }
+      const p = crearPuntoAsignado(ini, d, null); REC.de = p.id; REC.pts[0] = [p.lat, p.lon, Date.now(), 0]; fin(true);
+    };
+    q("pi-luego").onclick = () => fin(false);
+  });
+}
 async function marcarEnRecorrido() {
   if (!ULT) return alert("Aún no hay señal del GPS.");
-  const nom = prompt("Nombre del punto:", "Punto " + (C().puntos.length + 1)); if (nom === null) return;
-  const rolTxt = prompt("Función: 1 Inyección · 2 Estación de monitoreo · 3 Vertimiento · 4 Afluente · 5 Otro", "2"), rol = ROLES[(Number(rolTxt) || 2) - 1]?.[0] || "monitoreo";
-  const p = {id: pid(), nombre: nom || "Punto", rol, lat: ULT.lat, lon: ULT.lon, acc: Math.round(ULT.acc), alt_gps: ULT.alt ?? null, alt_acc: ULT.altAcc ?? null, cota: ULT.alt != null ? Math.round(ULT.alt * 10) / 10 : null, cota_origen: ULT.alt != null ? "gps" : null, hora_iso: new Date().toISOString(), notas: "", hid: {}};
-  const c = C(), iDe = c.puntos.findIndex(x => x.id === REC.de);
-  c.puntos.splice(iDe + 1, 0, p);                       // queda justo después del punto de donde salió
-  REC.pts.push([ULT.lat, ULT.lon, ULT.t, Math.round(ULT.acc), ULT.alt ?? null]); cerrarTramo(p.id);
-  REC = {de: p.id, pts: [[p.lat, p.lon, Date.now(), 0]], t0: Date.now()}; guardar(); pintarRecorrido();
+  const f = {lat: ULT.lat, lon: ULT.lon, acc: ULT.acc, alt: ULT.alt ?? null, altAcc: ULT.altAcc ?? null, t: ULT.t};
+  if (!REC.de && !(await preguntarInicio(true))) return;
+  const d = await modalAsignar({titulo: "Marcar punto aquí", nombre: "Punto " + (C().puntos.length + 1)}); if (!d || !REC) return;
+  REC.pts.push([f.lat, f.lon, f.t, Math.round(f.acc), f.alt]);
+  const de = REC.de, p = crearPuntoAsignado(f, d, de);                 // queda justo después del punto de donde salió
+  cerrarTramo(p.id); REC = {de: p.id, pts: [[p.lat, p.lon, Date.now(), 0]], t0: Date.now()}; guardar(); pintarRecorrido();
 }
-function detenerRecorrido() {
-  const c = C(), r = REC; REC = null; if (!c.puntos.length) return pintarRecorrido();
+async function detenerRecorrido() {
+  const c = C(), r = REC;
+  if (r && !r.de && r.pts.length >= 3) { const ok = await preguntarInicio(true); if (!ok && !confirm("Sin saber dónde empezó, el recorrido no se puede guardar. ¿Descartarlo?")) return; }
+  REC = null; if (!r || !r.de) { pintarRecorrido(); return; }
   if (r.pts.length < 3) { pintarRecorrido(); return; }
-  $("t-rec").innerHTML = `<div class="card"><b>Recorrido detenido</b><p class="nota">${r.pts.length} lecturas, ${nf(longitud(r.pts), 0)} m. ¿En qué punto terminó?</p><div class="fila"><label>Punto de llegada<select id="rec-fin">${c.puntos.filter(p => p.id !== r.de).map(p => `<option value="${p.id}">${c.puntos.indexOf(p) + 1}. ${esc(p.nombre)}</option>`).join("")}</select></label></div>
+  $("t-rec").innerHTML = `<div class="card"><b>Recorrido detenido</b><p class="nota">${r.pts.length} lecturas, ${nf(longitud(r.pts), 0)} m. ¿En qué punto terminó?</p><div class="fila"><label>Punto de llegada<select id="rec-fin">${c.puntos.filter(p => p.id !== r.de).map(p => `<option value="${p.id}">${c.puntos.indexOf(p) + 1}. ${esc(p.nombre)}</option>`).join("")}<option value="__nuevo">— un punto nuevo aquí (mi ubicación) —</option></select></label></div>
     <div style="display:flex;gap:.5rem;margin-top:.5rem"><button class="b" id="rec-ok">Guardar el tramo</button><button class="b g" id="rec-no">Descartar</button></div></div>`;
-  $("rec-ok").onclick = () => { if (!$("rec-fin").value) return alert("Marque primero el punto de llegada."); REC = r; cerrarTramo($("rec-fin").value); REC = null; guardar(); pintarRecorrido(); };
+  $("rec-ok").onclick = async () => {
+    let fin = $("rec-fin").value; if (!fin) return alert("Marque primero el punto de llegada.");
+    if (fin === "__nuevo") { const u = r.pts[r.pts.length - 1], d = await modalAsignar({titulo: "Punto de llegada", nombre: "Punto " + (c.puntos.length + 1)}); if (!d) return; fin = crearPuntoAsignado({lat: u[0], lon: u[1], acc: u[3] || null, alt: u[4] ?? null}, d, r.de).id; }
+    REC = r; cerrarTramo(fin); REC = null; guardar(); pintarRecorrido(); };
   $("rec-no").onclick = () => pintarRecorrido();
 }
 setInterval(() => { if (REC && TAB === "rec" && $("rec-vivo")) $("rec-vivo").innerHTML = vivo(); }, 1000);
@@ -695,7 +754,7 @@ function pintarGuardar() {
 }
 
 // ------------------------------------------------------------------ arranque
-const APP_VERSION = "campo-v30";
+const APP_VERSION = "campo-v31";
 if ("serviceWorker" in navigator) {
   const habiaControl = !!navigator.serviceWorker.controller; let recargado = false;
   navigator.serviceWorker.addEventListener("controllerchange", () => { if (!habiaControl || recargado || REC) return; recargado = true; location.reload(); });      // versión nueva lista: recarga (los datos están en el teléfono; no se recarga a mitad de un recorrido)
