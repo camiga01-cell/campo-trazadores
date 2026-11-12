@@ -59,7 +59,7 @@ function mezclaCalc(Z) {                    // variación de la conductividad en
   return {n: v.length, listo: true, med, rango, pct, tol, ok: pct <= tol, contraste: contr, pocoContraste: contr !== null && contr < 2 * tol};
 }
 function mue() {
-  const c = C(); if (!c.muestreo) c.muestreo = {equipo: "", serie: "", calib: "", sitios: {}};
+  const c = C(); if (!c.muestreo) c.muestreo = {sitios: {}};
   return c.muestreo;
 }
 function sitioM(k) {
@@ -143,7 +143,6 @@ function pintarMuestreo() {
   $("t-mue").innerHTML = `<h2>Toma de muestras de calidad</h2>
     <p class="nota">Tres sitios del río, en este orden. Para seguir la <b>misma masa de agua</b>, tome cada muestra después del tiempo de viaje del sitio anterior (nunca antes del primer arribo del ensayo de trazadores). Esta es la bitácora de campo de la campaña <b>${esc(c.nombre)}</b>; las medidas con sonda y los frascos van en sus formatos de campo.</p>
     ${c.puntos.length ? selectorFondo() + '<div id="mapa-caja">' + mapaSVG() + "</div>" : ""}
-    <details class="card"><summary><b>Equipo de medida en campo</b></summary><div class="fila" style="margin-top:.4rem">${campo("Equipo / marca / modelo", "muestreo.equipo", "t", M.equipo)}${campo("Serie", "muestreo.serie", "t", M.serie)}${campo("Fecha del último certificado de calibración", "muestreo.calib", "f", M.calib)}</div><p class="nota">La CAR pide los certificados de calibración de los equipos: anote aquí la fecha y adjunte el certificado en el informe.</p></details>
     ${sit}`;
   document.querySelectorAll("details[data-sitio]").forEach(d => d.addEventListener("toggle", () => { d.open ? ABIERTOS_M.add(d.dataset.sitio) : ABIERTOS_M.delete(d.dataset.sitio); }));
   document.querySelectorAll("[data-pm]").forEach(sl => sl.onchange = () => { sitioM(sl.dataset.pm).punto_id = sl.value || null; guardar(); pintarMuestreo(); });
@@ -175,17 +174,16 @@ setInterval(() => { if (TAB === "mue") actualizarMuestreo(); else if (document.v
 // ---- exportación y combinación (las usa app.js)
 function muestreoExport() {
   const c = C(); if (!c.muestreo) return null; const M = c.muestreo;
-  return {equipo: M.equipo, serie: M.serie, calibracion: M.calib, sitios: SITIOS_M.map(s => { const S = sitioM(s.k), p = punto(S.punto_id); return {clave: s.k, nombre: s.n.slice(4), ...S, punto: p ? p.nombre : null}; })};
+  return {sitios: SITIOS_M.map(s => { const S = sitioM(s.k), p = punto(S.punto_id); return {clave: s.k, nombre: s.n.slice(4), ...S, punto: p ? p.nombre : null}; })};
 }
 function muestreoImport(m) {
-  if (!m) return undefined; const M = {equipo: m.equipo || "", serie: m.serie || "", calib: m.calibracion || "", sitios: {}};
+  if (!m) return undefined; const M = {sitios: {}};
   (m.sitios || []).forEach(s => { const {clave, nombre, punto: _p, ...r} = s; M.sitios[clave] = r; }); return M;
 }
 function combinarMuestreo(a, b) {
   const vacio = v => v === null || v === undefined || v === ""; let n = 0;
   if (!b) return 0; if (!a.muestreo) { a.muestreo = b; return 1; }
   const M = a.muestreo;
-  ["equipo", "serie", "calib"].forEach(k => { if (vacio(M[k]) && !vacio(b[k])) { M[k] = b[k]; n++; } });
   Object.entries(b.sitios || {}).forEach(([k, sb]) => {
     const sa = M.sitios[k]; if (!sa) { M.sitios[k] = sb; n++; return; }
     ["punto_id", "hora_ini", "hora_fin", "t_viaje_min", "lluvia24", "q_ls", "metodo_q", "notas"].forEach(x => { if (vacio(sa[x]) && !vacio(sb[x])) { sa[x] = sb[x]; n++; } });
@@ -196,7 +194,7 @@ function combinarMuestreo(a, b) {
 }
 function muestreoCsv() {                    // filas para el .csv de «Guardar»: datos del sitio y una fila por lectura hidroclimatológica
   const c = C(); if (!c.muestreo) return []; const M = c.muestreo;
-  const L = [[], ["MUESTREO DE CALIDAD"], ["Equipo", M.equipo, "Serie", M.serie, "Calibración", M.calib],
+  const L = [[], ["MUESTREO DE CALIDAD"],
     ["Sitio", "Punto", "Latitud", "Longitud", "Precisión (m)", "Cota (m)", "Inicio", "Fin", "Tiempo de viaje (min)", "Lluvia 24 h", "Caudal vertimiento (L/s)", "Método de aforo", "Mezcla: variación (%)", "Mezcla: ¿completa?", "Notas"]];
   SITIOS_M.forEach(s => { const S = sitioM(s.k), p = punto(S.punto_id) || {}, mz = s.k === "mezcla" ? mezclaCalc(S.mezcla) : null; L.push([s.n.slice(4), p.nombre, p.lat, p.lon, p.acc, p.cota, S.hora_ini, S.hora_fin, S.t_viaje_min, S.lluvia24, S.q_ls, S.metodo_q, mz && mz.listo ? mz.pct.toFixed(1) : "", mz && mz.listo ? (mz.ok ? "sí" : "no") : "", S.notas]); });
   L.push([], ["HIDROCLIMATOLOGÍA", "Fecha", "Sitio", "Hora", "T aire (°C)", "HR (%)", "T rocío (°C)", "Viento (m/s)", "Altura del viento (m)", "Nubosidad (%)", "Sombra (%)", "Radiación (W/m2)"]);
