@@ -28,7 +28,7 @@ const AYUDA_M = {
   sombra: ["Sombra sobre el cauce", "Porcentaje del agua del tramo que NO recibe sol directo por árboles, vegetación de orilla o paredes del cauce: 0 = a pleno sol, 100 = todo en sombra. Estímelo mirando el tramo (no solo el punto) a esa hora; cambia durante el día.", "Shade (por hora)"],
   rad: ["Radiación solar", "En W/m² con piranómetro, a esa hora. Si no tiene el equipo déjela vacía: el modelo normalmente la calcula con la latitud, la fecha y las nubes.", "Solar (opcional)"],
   lluvia24: ["Lluvia previa", "Milímetros del pluviómetro, o descripción: sin lluvia / llovizna / aguacero, y a qué hora fue. Explica cambios de caudal y de carga en el río.", "Condición hidroclimatológica que pide la CAR"],
-  t_viaje: ["Tiempo de viaje", "Minutos que tarda el agua desde el sitio anterior hasta este: sale del ensayo de trazadores (entre el primer arribo y el tiempo medio de viaje) o del modelo hidráulico.", "Seguimiento de la misma masa de agua"],
+  t_viaje: ["Tiempo de viaje", "Minutos que tarda el agua desde el sitio anterior hasta este. La app lo calcula con los picos del ensayo de trazadores de esta campaña o, si no hay, con distancia ÷ velocidad de las secciones; si lo escribe usted, se respeta su valor.", "Seguimiento de la misma masa de agua"],
   cota: ["Cota", "Altura del punto sobre el nivel del mar (m), de topografía o nivelación. La altitud del GPS no sirve para pendientes de tramos cortos.", "Pendiente del tramo"]
 };
 (() => { const st = document.createElement("style"); st.textContent = ".ayuda-m{flex:1 1 100%;background:#eef4ff;border-left:4px solid var(--az);padding:.4rem .6rem;border-radius:.3rem;font-size:.84rem;margin:.2rem 0;color:#1d2433}.ayuda-m small{display:block;color:var(--gr);margin-top:.15rem}"; document.head.appendChild(st); })();
@@ -54,9 +54,9 @@ let ABIERTOS_M = new Set(["arriba"]);
 
 const lecturaVacia = (u) => ({hora: horaTxt(new Date()).slice(0, 5), t_aire: null, hr: null, viento: null, h_viento: u ? u.h_viento : null, nub_pct: null, sombra_pct: u ? u.sombra_pct : null, rad: null});
 const lecturaConDatos = m => ["t_aire", "hr", "viento", "nub_pct", "sombra_pct", "rad"].some(k => m[k] !== null && m[k] !== undefined && m[k] !== "");
-const mezclaVacia = () => ({descarga: "orilla", ancho_m: null, prof_m: null, vel_ms: null, pend: null, dist_m: null, tol_pct: 5, ec_vert: null, ec_arriba: null, verticales: [{pos: "Margen izquierda", ec: null}, {pos: "Centro", ec: null}, {pos: "Margen derecha", ec: null}]});
+const mezclaVacia = () => ({descarga: "orilla", ancho_m: null, prof_m: null, pend: null, dist_m: null, tol_pct: 5, ec_vert: null, ec_arriba: null, verticales: [{pos: "Margen izquierda", ec: null}, {pos: "Centro", ec: null}, {pos: "Margen derecha", ec: null}]});
 function fischerM(S, Z) {                  // longitud de mezcla (Fischer et al. 1979): Lm = c·U·W²/Et; Et = α·H·U*; U* = √(g·H·S); c = 0,4 (descarga en la orilla) o 0,1 (en el centro)
-  const W = Z.ancho_m, H = Z.prof_m, U = Z.vel_ms; let Sp = Z.pend, origenS = "escrita";
+  const W = Z.ancho_m, H = Z.prof_m, U = S.vel_ms; let Sp = Z.pend, origenS = "escrita";
   if (!(Sp > 0)) { const q = pendienteVert(S); if (q) { Sp = q.s; origenS = "de las cotas de los puntos"; } }
   if (!(W > 0 && H > 0 && U > 0 && Sp > 0)) return null;
   const alfa = C().params.alpha_t > 0 ? C().params.alpha_t : 0.6, coef = Z.descarga === "centro" ? 0.1 : 0.4, us = Math.sqrt(G * H * Sp), et = alfa * H * us;
@@ -80,7 +80,7 @@ function mue() {
 function sitioM(k) {
   const M = mue(); if (M.sitios[k]) { const E = M.sitios[k]; if (!E.meteo) E.meteo = []; if (!E.meteo.length && k !== "vertimiento") E.meteo.push(lecturaVacia()); if (k === "mezcla" && !E.mezcla) E.mezcla = mezclaVacia(); if (k === "vertimiento" && E.q_ls === undefined) { E.q_ls = null; E.metodo_q = ""; } return E; }
   const S = SITIOS_M.find(s => s.k === k);
-  return M.sitios[k] = {punto_id: null, hora_ini: "", hora_fin: "", t_viaje_min: null,
+  return M.sitios[k] = {punto_id: null, hora_ini: "", hora_fin: "", t_viaje_min: null, t_auto: true, t_origen: "", vel_ms: null,
     meteo: k === "vertimiento" ? [] : [lecturaVacia()], lluvia24: "", notas: "", ...(k === "mezcla" ? {mezcla: mezclaVacia()} : {}), ...(k === "vertimiento" ? {q_ls: null, metodo_q: ""} : {})};
 }
 const horaDe = (h, c = C()) => { if (!h) return null; const f = new Date((c.fecha || new Date().toISOString().slice(0, 10)) + "T00:00:00"), [a, b, s] = h.split(":").map(Number); f.setHours(a, b, s || 0, 0); return f; };
@@ -111,12 +111,44 @@ function posicionHtml(s, S) {              // misma ficha que la pestaña Puntos
     <div class="nota">${A[i] === null ? "" : "Abscisa desde el primer punto: <b>" + nf(A[i], 0) + " m</b>"}${i ? ` · desde el punto anterior: <b>${nf(L[i - 1].d, 0)} m</b> (${L[i - 1].origen})` : ""}${p.rol === "muestreo" ? ". Se insertó en la lista de Puntos en el orden del río, entre los demás sitios de muestreo; si hay puntos del ensayo de trazadores en medio, revise el orden con ↑ ↓ en la pestaña Puntos." : ""}</div>
     <button class="b g p" data-mreub="${i}" style="margin-top:.3rem">📍 Volver a tomar la ubicación aquí</button></div>`;
 }
+const minDia = h => { if (!h) return null; const [a, b, c] = String(h).split(":").map(Number); return isFinite(a) && isFinite(b) ? a * 60 + b + (c || 0) / 60 : null; };
+function distanciaM(kA, kB) {              // distancia por el recorrido (o en línea recta) entre los puntos de dos sitios
+  const c = C(), pa = punto(sitioM(kA).punto_id), pb = punto(sitioM(kB).punto_id);
+  if (!pa || !pb || !isFinite(pa.lat) || !isFinite(pb.lat)) return null;
+  const A = abscisas(), ia = c.puntos.indexOf(pa), ib = c.puntos.indexOf(pb);
+  if (A[ia] !== null && A[ib] !== null) return {m: Math.abs(A[ib] - A[ia]), a: A[ia], b: A[ib], origen: "por el recorrido entre puntos"};
+  return {m: hav([pa.lat, pa.lon], [pb.lat, pb.lon]), a: null, b: null, origen: "en línea recta"};
+}
+function tiemposEnsayo() {                 // referencias del ensayo de trazadores de esta campaña: inyección (hora) y picos vistos en las estaciones, por abscisa
+  const c = C(), A = abscisas(), R = [];
+  c.puntos.forEach((p, i) => { if (A[i] === null) return; const t = p.rol === "inyeccion" ? minDia(c.inyeccion && c.inyeccion.hora) : minDia((c.registros[p.id] || {}).pico); if (t !== null) R.push({a: A[i], t, nombre: p.nombre}); });
+  R.sort((x, y) => x.a - y.a); return R;
+}
+function propT(k) {                        // A: con el ensayo de trazadores; B: distancia ÷ velocidad de las secciones aforadas
+  const def = SITIOS_M.find(x => x.k === k); if (!def.previo) return {};
+  const D = distanciaM(def.previo, k), out = {};
+  if (D && D.a !== null) {
+    const R = tiemposEnsayo(); let ok = R.length >= 2;
+    for (let i = 1; i < R.length; i++) if (!(R[i].t > R[i - 1].t && R[i].a > R[i - 1].a)) ok = false;
+    if (ok) {
+      const tAt = a => { let i = 1; while (i < R.length - 1 && a > R[i].a) i++; const u = R[i - 1], v = R[i]; return u.t + (a - u.a) * (v.t - u.t) / (v.a - u.a); };
+      const sign = D.b >= D.a ? 1 : -1, t = sign * (tAt(D.b) - tAt(D.a)), fuera = Math.min(D.a, D.b) < R[0].a || Math.max(D.a, D.b) > R[R.length - 1].a;
+      if (t > 0) out.A = {min: t, fuente: `ensayo de trazadores (${R.length} referencias: ${R.map(x => x.nombre).join(", ")})${fuera ? " — parte del tramo queda fuera de las estaciones: extrapolado" : ""}`};
+    }
+  }
+  const ud = (kk) => { const e = SITIOS_M.find(x => x.k === kk); return sitioM(kk).vel_ms > 0 ? sitioM(kk).vel_ms : (kk === "vertimiento" ? sitioM("arriba").vel_ms : null); };
+  const ua = ud(def.previo), ub = ud(k), us = [ua, ub].filter(v => v > 0);
+  if (D && us.length) { const u = us.reduce((x, y) => x + y, 0) / us.length; out.B = {min: D.m / u / 60, fuente: `${nf(D.m, 0)} m ÷ ${nf(u, 2)} m/s (${us.length === 2 ? "promedio de las dos secciones" : "una sola sección aforada"})`}; }
+  out.D = D; return out;
+}
+function propuestaHtml(k, S, P) {
+  const o = S.t_origen ? ` <span class="badge">${esc(S.t_origen)}</span>` : "";
+  const fila = (x, t, nom) => x ? `<div class="nota">${nom}: <b>${nf(x.min, 1)} min</b> — ${esc(x.fuente)}. <button class="b g p" data-tuse="${k}|${t}">Usar este</button></div>` : "";
+  const dif = P.A && P.B ? Math.abs(P.A.min - P.B.min) / P.A.min * 100 : null;
+  return `${o ? `<div class="nota">Valor actual: <b>${nf(S.t_viaje_min, 1)} min</b>${o}</div>` : ""}${fila(P.A, "A", "Con trazadores")}${fila(P.B, "B", "Con las secciones")}${dif !== null && dif > 30 ? `<div class="adv">⚠ Las dos estimaciones difieren ${nf(dif, 0)} %: el ensayo suele dar más tiempo que distancia ÷ velocidad en tramos con pozas. Si el caudal no cambió, prefiera el del ensayo.</div>` : ""}${!P.A && !P.B ? '<div class="nota">Sin datos para estimarlo: registre los picos del ensayo (pestaña Ensayo) o la velocidad media del río en los sitios (aforo), con los puntos ya ubicados. Mientras tanto puede escribirlo.</div>' : ""}${!P.A && P.B ? '<div class="nota">Aún no hay picos del ensayo para este tramo; esta es una estimación aproximada con las secciones.</div>' : ""}`;
+}
 function distVertM(S) {                    // distancia por el recorrido (o en línea recta) entre el punto del vertimiento y el de este sitio
-  const c = C(), pv = punto(sitioM("vertimiento").punto_id), pm = punto(S.punto_id);
-  if (!pv || !pm || !isFinite(pv.lat) || !isFinite(pm.lat)) return null;
-  const A = abscisas(), iv = c.puntos.indexOf(pv), im = c.puntos.indexOf(pm);
-  if (A[iv] !== null && A[im] !== null) return {m: Math.abs(A[im] - A[iv]), origen: "por el recorrido entre puntos"};
-  return {m: hav([pv.lat, pv.lon], [pm.lat, pm.lon]), origen: "en línea recta"};
+  return distanciaM("vertimiento", "mezcla");
 }
 function mezclaHtml(S, r) {
   const Z = S.mezcla, z = r + ".mezcla", D = distVertM(S), pv = punto(sitioM("vertimiento").punto_id);
@@ -126,7 +158,7 @@ function mezclaHtml(S, r) {
   const ubic = `<h2 style="font-size:.95rem">1 · ¿Está bien ubicado este punto? (longitud de mezcla)</h2>
     <p class="nota">La longitud de mezcla (Fischer) dice a qué distancia de la descarga el vertimiento se mezcla de orilla a orilla. Este punto debe quedar <b>a esa distancia o más</b> aguas abajo. Escriba el ancho, la profundidad y la velocidad del río en esta sección (las del aforo).</p>
     <div class="fila"><label>Descarga del vertimiento en la sección<select data-r="${z}.descarga" data-re="1" ${AY("descarga")}><option value="orilla"${Z.descarga !== "centro" ? " selected" : ""}>en la orilla (lateral)</option><option value="centro"${Z.descarga === "centro" ? " selected" : ""}>en el centro del cauce</option></select></label>
-      ${campo("Ancho del río (m)", z + ".ancho_m", "n", Z.ancho_m, AY("ancho", true))}${campo("Profundidad media (m)", z + ".prof_m", "n", Z.prof_m, AY("prof", true))}${campo("Velocidad media (m/s)", z + ".vel_ms", "n", Z.vel_ms, AY("vel", true))}${campo("Pendiente (m/m)", z + ".pend", "n", Z.pend, AY("pend", true) + (pend0 ? ` placeholder="de las cotas: ${nf(pend0.s, 4)}"` : ""))}</div>
+      ${campo("Ancho del río (m)", z + ".ancho_m", "n", Z.ancho_m, AY("ancho", true))}${campo("Profundidad media (m)", z + ".prof_m", "n", Z.prof_m, AY("prof", true))}${campo("Velocidad media (m/s)", r + ".vel_ms", "n", S.vel_ms, AY("vel", true))}${campo("Pendiente (m/m)", z + ".pend", "n", Z.pend, AY("pend", true) + (pend0 ? ` placeholder="de las cotas: ${nf(pend0.s, 4)}"` : ""))}</div>
     ${!F ? '<div class="nota">Complete ancho, profundidad, velocidad y pendiente para calcular la longitud de mezcla.</div>' : (() => { const D2 = D ? D.m : (Z.dist_m > 0 ? Z.dist_m : null), falta = D2 === null ? null : F.Lm - D2;
       return `<div class="card" style="border-width:2px;border-color:${falta === null ? "var(--bd)" : falta <= 0 ? "var(--ok)" : "var(--ro)"}"><b>Longitud de mezcla (Fischer): ${nf(F.Lm, 0)} m</b>${D2 === null ? '<div class="nota">Ubique el punto del vertimiento y este sitio para comparar con la distancia real.</div>' : falta <= 0 ? `<div class="nota">✔ Distancia real desde la descarga: <b>${nf(D2, 0)} m</b> ≥ ${nf(F.Lm, 0)} m. La posición del punto es correcta.</div>` : `<div class="nota"><b style="color:var(--ro)">✗ Distancia real: ${nf(D2, 0)} m &lt; ${nf(F.Lm, 0)} m.</b> El punto está muy cerca: <b>desplácelo al menos ${nf(falta, 0)} m aguas abajo</b> (hasta ≥ ${nf(F.Lm, 0)} m de la descarga) y vuelva a marcar su ubicación.</div>`}
         <div class="nota">U* = ${nf(F.us, 3)} m/s · Et = ${nf(F.et, 4)} m²/s · coeficiente ${F.coef} (${Z.descarga === "centro" ? "centro" : "orilla"}) · α = ${nf(F.alfa, 2)} (por confirmar) · pendiente ${nf(F.S, 4)} (${F.origenS}).</div></div>`; })()}`;
@@ -158,14 +190,17 @@ function meteoHtml(s, S, r, MA) {
       <div class="fila">${campo("Lluvia en las últimas 24 h", r + ".lluvia24", "t", S.lluvia24, AY("lluvia24"))}</div>`;
 }
 function pintarMuestreo() {
-  const c = C(), M = mue();
+  const c = C(), M = mue(), PT = {};
+  SITIOS_M.forEach(s => { if (!s.previo) return; const S = sitioM(s.k), P = PT[s.k] = propT(s.k), mejor = P.A || P.B;
+    if (S.t_auto !== false && mejor) { S.t_viaje_min = Math.round(mejor.min * 10) / 10; S.t_origen = P.A ? "calculado con trazadores" : "calculado con las secciones"; } });
   const sit = SITIOS_M.map(s => {
     const S = sitioM(s.k), R = resumenM(S), r = `muestreo.sitios.${s.k}`, MZ = s.k === "mezcla" ? mezclaCalc(S.mezcla) : null, W = avisosM(S), MA = avisosMeteo(S), sug = sugeridaM(s.k);
     return `<details class="card est ${R.listo ? "ya" : ""}" data-sitio="${s.k}" ${ABIERTOS_M.has(s.k) ? "open" : ""}><summary><b>${s.n}</b> ${S.hora_ini ? `<span class="badge">${S.hora_ini.slice(0, 5)}</span>` : ""} ${MZ && MZ.listo ? (MZ.ok ? '<span class="badge" style="background:#d9f2e3">mezclado</span>' : '<span class="badge" style="background:#fbdcd6">sin mezclar</span>') : ""} ${R.listo ? "✔" : ""}</summary>
       <p class="nota">${s.d}</p>
       ${posicionHtml(s, S)}
       <h2 style="font-size:.95rem">Hora de la toma</h2>
-      ${s.previo ? `<div class="fila">${campo("Tiempo de viaje desde «" + SITIOS_M.find(x => x.k === s.previo).n.slice(4) + "» (min)", r + ".t_viaje_min", "n", S.t_viaje_min, AY("t_viaje", true))}</div><div class="nota" id="sug-${s.k}">${sug ? "" : "Escriba el tiempo de viaje (del ensayo de trazadores o del modelo) para ver la hora sugerida."}</div>` : '<p class="nota">Este sitio marca el arranque: las horas de los demás se calculan desde su hora de inicio.</p>'}
+      ${s.previo ? `<div class="fila">${campo("Tiempo de viaje desde «" + SITIOS_M.find(x => x.k === s.previo).n.slice(4) + "» (min)", r + ".t_viaje_min", "n", S.t_viaje_min, AY("t_viaje"))}</div><div class="nota" id="sug-${s.k}">${sug ? "" : "Con el tiempo de viaje y la hora de inicio del sitio anterior verá aquí la hora sugerida."}</div>${propuestaHtml(s.k, S, PT[s.k])}` : '<p class="nota">Este sitio marca el arranque: las horas de los demás se calculan desde su hora de inicio.</p>'}
+      ${s.k === "arriba" || s.k === "abajo" ? `<div class="fila">${campo("Velocidad media del río en este sitio (m/s) — del aforo", r + ".vel_ms", "n", S.vel_ms, AY("vel", true))}</div>` : ""}
       <div class="fila">${campo("Inicio de la toma", r + ".hora_ini", "h", S.hora_ini, 'data-re="1"')}${campo("Fin de la toma", r + ".hora_fin", "h", S.hora_fin)}</div>
       <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin:.3rem 0"><button class="b g p" data-ahoram="${s.k}|hora_ini">Empecé ahora</button><button class="b g p" data-ahoram="${s.k}|hora_fin">Terminé ahora</button></div>
       ${W.length ? `<div class="adv">⚠ ${W.join(" · ")}</div>` : ""}
@@ -192,6 +227,7 @@ function pintarMuestreo() {
   document.querySelectorAll("[data-ahoram]").forEach(b => b.onclick = () => { const [k, campoH] = b.dataset.ahoram.split("|"), S = sitioM(k); S[campoH] = horaTxt(new Date()); const s = SITIOS_M.find(x => x.k === k); evento((campoH === "hora_ini" ? "Inicio de toma de muestra en " : "Fin de toma de muestra en ") + s.n.slice(4)); pintarMuestreo(); });
   document.querySelectorAll("[data-meadd]").forEach(b => b.onclick = () => { const S = sitioM(b.dataset.meadd), u = S.meteo[S.meteo.length - 1]; S.meteo.push(lecturaVacia(u)); guardar(); pintarMuestreo(); });
   document.querySelectorAll("[data-medel]").forEach(b => b.onclick = () => { const [k, n] = b.dataset.medel.split("|"); sitioM(k).meteo.splice(+n, 1); guardar(); pintarMuestreo(); });
+  document.querySelectorAll("[data-tuse]").forEach(b => b.onclick = () => { const [k, t] = b.dataset.tuse.split("|"), S = sitioM(k), x = PT[k] && PT[k][t]; if (!x) return; S.t_viaje_min = Math.round(x.min * 10) / 10; S.t_origen = t === "A" ? "con trazadores (elegido)" : "con las secciones (elegido)"; S.t_auto = false; guardar(); pintarMuestreo(); });
   document.querySelectorAll("[data-mzadd]").forEach(b => b.onclick = () => { sitioM("mezcla").mezcla.verticales.push({pos: "Punto " + (sitioM("mezcla").mezcla.verticales.length + 1), ec: null}); guardar(); pintarMuestreo(); });
   document.querySelectorAll("[data-mzdel]").forEach(b => b.onclick = () => { sitioM("mezcla").mezcla.verticales.splice(+b.dataset.mzdel, 1); guardar(); pintarMuestreo(); });
   actualizarMuestreo();
@@ -222,7 +258,7 @@ function combinarMuestreo(a, b) {
   const M = a.muestreo;
   Object.entries(b.sitios || {}).forEach(([k, sb]) => {
     const sa = M.sitios[k]; if (!sa) { M.sitios[k] = sb; n++; return; }
-    ["punto_id", "hora_ini", "hora_fin", "t_viaje_min", "lluvia24", "q_ls", "metodo_q", "notas"].forEach(x => { if (vacio(sa[x]) && !vacio(sb[x])) { sa[x] = sb[x]; n++; } });
+    ["punto_id", "hora_ini", "hora_fin", "t_viaje_min", "t_origen", "vel_ms", "lluvia24", "q_ls", "metodo_q", "notas"].forEach(x => { if (vacio(sa[x]) && !vacio(sb[x])) { sa[x] = sb[x]; n++; } });
     if (sb.mezcla && sa.mezcla && !mezclaCalc(sa.mezcla).listo && mezclaCalc(sb.mezcla).listo) { sa.mezcla = sb.mezcla; n++; }
     (sb.meteo || []).filter(lecturaConDatos).forEach(mb => { if (!(sa.meteo || (sa.meteo = [])).some(m => m.hora === mb.hora)) { sa.meteo.push(mb); n++; } }); sa.meteo.sort((x, y) => (x.hora || "") < (y.hora || "") ? -1 : 1);
   });
@@ -231,10 +267,11 @@ function combinarMuestreo(a, b) {
 function muestreoCsv() {                    // filas para el .csv de «Guardar»: datos del sitio y una fila por lectura hidroclimatológica
   const c = C(); if (!c.muestreo) return []; const M = c.muestreo;
   const L = [[], ["MUESTREO DE CALIDAD"],
-    ["Sitio", "Punto", "Latitud", "Longitud", "Precisión (m)", "Cota (m)", "Inicio", "Fin", "Tiempo de viaje (min)", "Lluvia 24 h", "Caudal vertimiento (L/s)", "Método de aforo", "Mezcla: variación (%)", "Mezcla: ¿completa?", "Notas"]];
-  SITIOS_M.forEach(s => { const S = sitioM(s.k), p = punto(S.punto_id) || {}, mz = s.k === "mezcla" ? mezclaCalc(S.mezcla) : null; L.push([s.n.slice(4), p.nombre, p.lat, p.lon, p.acc, p.cota, S.hora_ini, S.hora_fin, S.t_viaje_min, S.lluvia24, S.q_ls, S.metodo_q, mz && mz.listo ? mz.pct.toFixed(1) : "", mz && mz.listo ? (mz.ok ? "sí" : "no") : "", S.notas]); });
+    ["Sitio", "Punto", "Latitud", "Longitud", "Precisión (m)", "Cota (m)", "Inicio", "Fin", "Tiempo de viaje (min)", "Origen del tiempo de viaje", "Velocidad media (m/s)", "Lluvia 24 h", "Caudal vertimiento (L/s)", "Método de aforo", "Mezcla: variación (%)", "Mezcla: ¿completa?", "Notas"]];
+  SITIOS_M.forEach(s => { const S = sitioM(s.k), p = punto(S.punto_id) || {}, mz = s.k === "mezcla" ? mezclaCalc(S.mezcla) : null; L.push([s.n.slice(4), p.nombre, p.lat, p.lon, p.acc, p.cota, S.hora_ini, S.hora_fin, S.t_viaje_min, S.t_origen, S.vel_ms, S.lluvia24, S.q_ls, S.metodo_q, mz && mz.listo ? mz.pct.toFixed(1) : "", mz && mz.listo ? (mz.ok ? "sí" : "no") : "", S.notas]); });
   L.push([], ["HIDROCLIMATOLOGÍA", "Fecha", "Sitio", "Hora", "T aire (°C)", "HR (%)", "T rocío (°C)", "Viento (m/s)", "Altura del viento (m)", "Nubosidad (%)", "Sombra (%)", "Radiación (W/m2)"]);
   SITIOS_M.forEach(s => sitioM(s.k).meteo.filter(lecturaConDatos).forEach(m => { const d = rocioM(m.t_aire, m.hr); L.push(["", c.fecha, s.n.slice(4), m.hora, m.t_aire, m.hr, d === null ? "" : d.toFixed(1), m.viento, m.h_viento, m.nub_pct, m.sombra_pct, m.rad]); }));
   return L;
 }
 document.addEventListener("change", ev => { const r = ev.target.dataset && ev.target.dataset.r; if (r && /\.mezcla\.dist_m$/.test(r)) { const Z = sitioM("mezcla").mezcla; Z.dist_auto = false; guardar(); } });
+document.addEventListener("change", ev => { const r = ev.target.dataset && ev.target.dataset.r, m = r && r.match(/^muestreo\.sitios\.(\w+)\.t_viaje_min$/); if (m) { const S = sitioM(m[1]); S.t_auto = false; S.t_origen = "escrito a mano"; guardar(); } });
