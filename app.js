@@ -26,7 +26,7 @@ function programar(est, P) {
   let varAc = 0, tAc = 0, xPrev = 0;
   for (const e of est) {
     const nom = e.nombre || "Estación", etq = {x_m: "la distancia", q_m3s: "el caudal", ancho_m: "el ancho", prof_m: "la profundidad", pendiente: "la pendiente"};
-    for (const k of Object.keys(etq)) if (!(e[k] > 0)) throw new Error("«" + nom + "»: falta " + etq[k] + (k === "x_m" ? " (grabe el recorrido o escríbala)." : "."));
+    for (const k of Object.keys(etq)) if (!(e[k] > 0)) throw new Error("«" + nom + "»: falta " + etq[k] + (k === "x_m" ? " (escriba la distancia o mídala en «Puntos»)." : "."));
     if (e.x_m <= xPrev) throw new Error("La distancia de «" + nom + "» (" + nf(e.x_m, 0) + " m) debe ser mayor que la de la anterior (" + nf(xPrev, 0) + " m).");
     const u = e.q_m3s / (e.ancho_m * e.prof_m), uEst = Math.sqrt(G * e.prof_m * e.pendiente);
     const dEst = C_FISCHER * u * u * e.ancho_m * e.ancho_m / (e.prof_m * uEst), DL = e.d_l_medido > 0 ? e.d_l_medido : dEst;
@@ -65,14 +65,14 @@ const C = () => DB.campanas.find(c => c.id === DB.activa) || DB.campanas[0];
 const pid = () => "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 const punto = id => C().puntos.find(p => p.id === id);
 
-// distancias por el recorrido: puntos en el orden del río (aguas arriba → aguas abajo); cada par consecutivo usa el tramo grabado que los une
+// distancias: puntos en el orden del río (aguas arriba → aguas abajo); cada par consecutivo usa la distancia real escrita o medida en el mapa; si no hay, la línea recta
 function tramoEntre(a, b) { const T = C().tramos.filter(t => (t.de === a && t.a === b) || (t.de === b && t.a === a)); return T.length ? T[T.length - 1] : null; }
 function enlaces() {
   const P = C().puntos, L = [];
   for (let i = 1; i < P.length; i++) {
     const t = tramoEntre(P[i - 1].id, P[i].id), recta = hav([P[i - 1].lat, P[i - 1].lon], [P[i].lat, P[i].lon]);
-    if (t && t.manual_m > 0) L.push({d: t.manual_m, origen: "escrita"}); else if (t) L.push({d: t.dist_m, origen: "recorrido"});
-    else if (isFinite(recta)) L.push({d: recta, origen: "línea recta"}); else L.push({d: null, origen: "sin dato"});
+    if (t && t.manual_m > 0) L.push({d: t.manual_m, origen: t.origen === "mapa" ? "medida en el mapa" : "escrita", recta});
+    else if (isFinite(recta)) L.push({d: recta, origen: "línea recta", recta}); else L.push({d: null, origen: "sin dato", recta: null});
   }
   return L;
 }
@@ -85,7 +85,7 @@ function estaciones() {
 }
 
 // ------------------------------------------------------------------ GPS
-let watchId = null, ULT = null, REC = null, SEGURA = window.isSecureContext && "geolocation" in navigator, WAKE = null;
+let watchId = null, ULT = null, SEGURA = window.isSecureContext && "geolocation" in navigator, WAKE = null;
 const oyentes = [];
 function iniciarGPS() {
   if (!SEGURA) { alert("Este navegador no da el GPS en esta dirección: la app debe abrirse con https:// (o instalada). Mientras tanto puede escribir las coordenadas a mano."); return false; }
@@ -100,11 +100,6 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 function onFix(pos) {
   ULT = {lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy, alt: pos.coords.altitude, altAcc: pos.coords.altitudeAccuracy, t: pos.timestamp};
   pintarGPS(); oyentes.slice().forEach(f => f(ULT));
-  if (REC) {
-    const A = DB.ajustes, u = REC.pts[REC.pts.length - 1];
-    if (ULT.acc <= A.acc_max && (!u || hav([u[0], u[1]], [ULT.lat, ULT.lon]) >= Math.max(A.paso_min, ULT.acc * 0.5))) { REC.pts.push([ULT.lat, ULT.lon, ULT.t, Math.round(ULT.acc), ULT.alt ?? null]); pintarRecorrido(); }
-    else pintarRecorrido();
-  }
 }
 function pintarGPS() {
   const e = $("gps-est"), b = $("gps-btn");
@@ -113,7 +108,7 @@ function pintarGPS() {
   else if (!ULT) e.textContent = "GPS buscando señal…";
   else { const ok = ULT.acc <= 10 ? "🟢" : ULT.acc <= 25 ? "🟡" : "🔴"; e.textContent = ok + " ±" + Math.round(ULT.acc) + " m · " + ULT.lat.toFixed(5) + ", " + ULT.lon.toFixed(5); }
   b.innerHTML = SEGURA ? `<button class="b g p" id="gps-tog">${watchId === null ? "Encender GPS" : "Apagar GPS"}</button>` : "";
-  if ($("gps-tog")) $("gps-tog").onclick = () => watchId === null ? iniciarGPS() : (REC ? alert("Detenga primero el recorrido.") : detenerGPS());
+  if ($("gps-tog")) $("gps-tog").onclick = () => watchId === null ? iniciarGPS() : detenerGPS();
 }
 function altitud(fx) { const a = fx.filter(f => f.alt != null && isFinite(f.alt)); return a.length ? {alt: a.reduce((s, f) => s + f.alt, 0) / a.length, altAcc: Math.min(...a.map(f => f.altAcc ?? 99))} : {alt: null, altAcc: null}; }
 function fijarPunto(seg) {      // promedia los fixes de unos segundos (media ponderada por 1/precisión²)
@@ -139,12 +134,12 @@ document.querySelectorAll("#nav button").forEach(b => b.onclick = () => { TAB = 
 function mostrar() {
   document.querySelectorAll("#nav button").forEach(x => x.classList.toggle("on", x.dataset.t === TAB));
   document.querySelectorAll("main section").forEach(s => s.classList.toggle("on", s.id === "t-" + TAB));
-  ({pun: pintarPuntos, rec: pintarRecorrido, prog: pintarProg, camp: pintarCampana, mue: () => pintarMuestreo(), exp: pintarGuardar})[TAB](); if (!REC) refreshMapa(); pintarResp();
+  ({pun: pintarPuntos, prog: pintarProg, camp: pintarCampana, mue: () => pintarMuestreo(), exp: pintarGuardar})[TAB](); refreshMapa(); pintarResp();
 }
 function pintarCabecera() {
   $("sel-camp").innerHTML = DB.campanas.map(c => `<option value="${c.id}"${c.id === DB.activa ? " selected" : ""}>${esc(c.nombre)}</option>`).join("") + '<option value="__nueva">+ Nueva campaña…</option>';
 }
-$("sel-camp").onchange = ev => { if (ev.target.value === "__nueva") { const n = prompt("Nombre de la nueva campaña (p. ej. el proyecto y la fecha):"); if (n) { const c = nueva(n); DB.campanas.push(c); DB.activa = c.id; guardar(); } } else { if (REC) { alert("Detenga primero el recorrido."); pintarCabecera(); return; } DB.activa = ev.target.value; guardar(); } pintarCabecera(); mostrar(); };
+$("sel-camp").onchange = ev => { if (ev.target.value === "__nueva") { const n = prompt("Nombre de la nueva campaña (p. ej. el proyecto y la fecha):"); if (n) { const c = nueva(n); DB.campanas.push(c); DB.activa = c.id; guardar(); } } else { DB.activa = ev.target.value; guardar(); } pintarCabecera(); mostrar(); };
 
 // edición genérica: data-r="ruta.con.puntos" (los índices de arreglos son números); data-t="n" numérico
 function fijar(obj, ruta, v) { const k = ruta.split("."); let o = obj; for (let i = 0; i < k.length - 1; i++) o = o[k[i]]; o[k[k.length - 1]] = v; }
@@ -159,7 +154,7 @@ document.addEventListener("change", ev => {
 const inp = (ruta, tipo, valor, extra = "") => `<input data-r="${ruta}" ${tipo === "n" ? 'data-t="n" type="text" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false"' : tipo === "h" ? 'type="time" step="1"' : tipo === "f" ? 'type="date"' : 'type="text"'} value="${valor === null || valor === undefined ? "" : (typeof valor === "number" ? Number(valor.toPrecision(7)) : esc(valor))}" ${extra}>`;
 const campo = (t, ruta, tipo, valor, extra) => `<label>${t}${inp(ruta, tipo, valor, extra)}</label>`;
 
-// ------------------------------------------------------------------ mapa: proyección Web Mercator centrada; fondo de calle o satélite si hay internet (si no, solo puntos y recorridos)
+// ------------------------------------------------------------------ mapa: proyección Web Mercator centrada; fondo de calle o satélite si hay internet (si no, solo puntos)
 const FONDOS = {calle: {t: "Calle (OpenStreetMap)", url: (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`, atr: "© OpenStreetMap", zmax: 19}, satelite: {t: "Satélite (Esri)", url: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`, atr: "Imágenes © Esri", zmax: 17}};
 const mercator = (lat, lon) => [(lon + 180) / 360, 0.5 - Math.log(Math.tan(Math.PI / 4 + rad(lat) / 2)) / (2 * Math.PI)];
 let MAPA_INFO = "";
@@ -177,34 +172,37 @@ function zMaxEsri(cx, cy) {
 }
 // Las pestañas comparten los mismos ids y las ocultas conservan su contenido: se busca siempre dentro de la pestaña visible
 const enAct = id => document.querySelector("section.on #" + id);
-function refreshMapa() { const el = enAct("mapa-caja") || enAct("rec-mapa"); if (el) el.innerHTML = mapaSVG(); }
+function refreshMapa() { const el = enAct("mapa-caja"); if (el) el.innerHTML = mapaSVG(); }
 document.addEventListener("click", ev => { const id = ev.target.id; if (!["mz-menos", "mz-mas", "mz-ajustar"].includes(id)) return; const k = DB.ajustes.zoomMapa || 0; DB.ajustes.zoomMapa = id === "mz-mas" ? Math.min(6, k + 1) : id === "mz-menos" ? Math.max(-4, k - 1) : 0; guardar(); refreshMapa(); });
 let FALLAS = 0;
-function fondoFalla() { FALLAS++; const n = enAct("mapa-nota"); if (n) n.textContent = "⚠ No cargó el fondo del mapa: revise la conexión a internet, o cambie a «Sin fondo». (Sin internet solo se ven los puntos y recorridos.)"; }
-function fondoOk() { const n = enAct("mapa-nota"); if (n && FALLAS) { FALLAS = 0; n.textContent = ""; } }
-function selectorFondo() { return `<label style="margin:.3rem 0">Fondo del mapa<select id="mapa-fondo"><option value="ninguno">Sin fondo (funciona sin internet)</option>${Object.entries(FONDOS).map(([k, f]) => `<option value="${k}"${DB.ajustes.fondo === k ? " selected" : ""}>${f.t}</option>`).join("")}</select></label><div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;margin:.3rem 0"><button class="b g p" id="mz-menos" aria-label="Alejar">−</button><button class="b g p" id="mz-mas" aria-label="Acercar">+</button><button class="b g p" id="mz-ajustar">Ajustar a los puntos</button><span class="nota" id="mapa-info"></span></div><div class="nota" id="mapa-nota">${DB.ajustes.fondo !== "ninguno" && navigator.onLine === false ? "⚠ Sin internet: no se ve el fondo, solo los puntos y recorridos." : ""}</div>`; }
+function fondoFalla() { FALLAS++; const n = $("med-nota") || enAct("mapa-nota"); if (n) n.textContent = "⚠ No cargó el fondo del mapa: revise la conexión a internet, o cambie a «Sin fondo». (Sin internet solo se ven los puntos.)"; }
+function fondoOk() { const n = $("med-nota") || enAct("mapa-nota"); if (n && FALLAS) { FALLAS = 0; n.textContent = ""; } }
+function selectorFondo() { return `<label style="margin:.3rem 0">Fondo del mapa<select id="mapa-fondo"><option value="ninguno">Sin fondo (funciona sin internet)</option>${Object.entries(FONDOS).map(([k, f]) => `<option value="${k}"${DB.ajustes.fondo === k ? " selected" : ""}>${f.t}</option>`).join("")}</select></label><div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;margin:.3rem 0"><button class="b g p" id="mz-menos" aria-label="Alejar">−</button><button class="b g p" id="mz-mas" aria-label="Acercar">+</button><button class="b g p" id="mz-ajustar">Ajustar a los puntos</button><span class="nota" id="mapa-info"></span></div><div class="nota" id="mapa-nota">${DB.ajustes.fondo !== "ninguno" && navigator.onLine === false ? "⚠ Sin internet: no se ve el fondo, solo los puntos." : ""}</div>`; }
 document.addEventListener("change", ev => { if (ev.target.id === "mapa-fondo") { DB.ajustes.fondo = ev.target.value; guardar(); refreshMapa(); } });
-function mapaSVG() {
-  const c = C(), P = c.puntos.filter(p => isFinite(p.lat) && isFinite(p.lon)), tr = c.tramos.filter(t => t.pts.length > 1);
-  if (!P.length && !(REC && REC.pts.length) && !ULT) return '<p class="nota">El mapa aparece cuando haya puntos.</p>';
-  const W = 600, H = 400, pad = 46, fondo = FONDOS[DB.ajustes.fondo];
-  const todos = [...P.map(p => [p.lat, p.lon]), ...tr.flatMap(t => t.pts), ...(REC ? REC.pts : []), ...(ULT ? [[ULT.lat, ULT.lon]] : [])].map(p => mercator(p[0], p[1]));
-  const latC = todos.length ? P.length ? P[0].lat : ULT.lat : 0, mPorU = 40075016.686 * Math.cos(rad(latC));           // metros por unidad de mundo
-  let x0 = Math.min(...todos.map(p => p[0])), x1 = Math.max(...todos.map(p => p[0])), y0 = Math.min(...todos.map(p => p[1])), y1 = Math.max(...todos.map(p => p[1]));
-  const minU = 60 / mPorU, dx = Math.max(x1 - x0, minU), dy = Math.max(y1 - y0, minU), sc = Math.min((W - 2 * pad) / dx, (H - 2 * pad) / dy) * 2 ** (DB.ajustes.zoomMapa || 0), cxF = (x0 + x1) / 2, cyF = (y0 + y1) / 2, mU = ULT && (DB.ajustes.zoomMapa || 0) > 0 ? mercator(ULT.lat, ULT.lon) : null, cx = mU ? mU[0] : cxF, cy = mU ? mU[1] : cyF;      // al acercar con el GPS encendido, la vista sigue su posición   // px por unidad de mundo
-  const X = u => W / 2 + (u - cx) * sc, Y = u => H / 2 + (u - cy) * sc, pt = (lat, lon) => { const m = mercator(lat, lon); return [X(m[0]), Y(m[1])]; };
-  let s = `<svg class="mapa" viewBox="0 0 ${W} ${H}" role="img" aria-label="Mapa de los puntos y el recorrido"><rect width="${W}" height="${H}" fill="#eef1f7"/>`;
-  if (fondo) {                                                                                                         // teselas que cubren la vista
+function teselas(cx, cy, sc, W, H) {                                  // teselas del fondo que cubren la vista (cx, cy: centro en coordenadas de mundo; sc: px por unidad de mundo)
+  const fondo = FONDOS[DB.ajustes.fondo]; let s = ""; if (!fondo) { MAPA_INFO = ""; return s; }
+  const X = u => W / 2 + (u - cx) * sc, Y = u => H / 2 + (u - cy) * sc;
     const zmx = DB.ajustes.fondo === "satelite" ? zMaxEsri(cx, cy) : fondo.zmax;
     let z = Math.max(0, Math.min(zmx, Math.round(Math.log2(sc / 256)) + 1)), n = 2 ** z;      // +1: teselas más nítidas en pantallas de alta densidad
     MAPA_INFO = "Imagen nivel " + z + (z >= zmx ? " (máximo disponible en este lugar: " + zmx + ")" : " de " + zmx + " disponibles");
     const tx0 = Math.floor((cx - W / 2 / sc) * n), tx1 = Math.floor((cx + W / 2 / sc) * n), ty0 = Math.max(0, Math.floor((cy - H / 2 / sc) * n)), ty1 = Math.min(n - 1, Math.floor((cy + H / 2 / sc) * n));
     if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) <= 60) for (let tx = tx0; tx <= tx1; tx++) for (let ty = ty0; ty <= ty1; ty++) s += `<image href="${fondo.url(z, ((tx % n) + n) % n, ty)}" x="${X(tx / n).toFixed(1)}" y="${Y(ty / n).toFixed(1)}" width="${(sc / n + 0.6).toFixed(1)}" height="${(sc / n + 0.6).toFixed(1)}" preserveAspectRatio="none" onerror="fondoFalla()" onload="fondoOk()"/>`;
-  }
+  return s;
+}
+function mapaSVG() {
+  const c = C(), P = c.puntos.filter(p => isFinite(p.lat) && isFinite(p.lon)), tr = c.tramos.filter(t => t.linea && t.linea.length > 1);
+  if (!P.length && !ULT) return '<p class="nota">El mapa aparece cuando haya puntos.</p>';
+  const W = 600, H = 400, pad = 46, fondo = FONDOS[DB.ajustes.fondo];
+  const todos = [...P.map(p => [p.lat, p.lon]), ...tr.flatMap(t => t.linea), ...(ULT ? [[ULT.lat, ULT.lon]] : [])].map(p => mercator(p[0], p[1]));
+  const latC = todos.length ? P.length ? P[0].lat : ULT.lat : 0, mPorU = 40075016.686 * Math.cos(rad(latC));           // metros por unidad de mundo
+  let x0 = Math.min(...todos.map(p => p[0])), x1 = Math.max(...todos.map(p => p[0])), y0 = Math.min(...todos.map(p => p[1])), y1 = Math.max(...todos.map(p => p[1]));
+  const minU = 60 / mPorU, dx = Math.max(x1 - x0, minU), dy = Math.max(y1 - y0, minU), sc = Math.min((W - 2 * pad) / dx, (H - 2 * pad) / dy) * 2 ** (DB.ajustes.zoomMapa || 0), cxF = (x0 + x1) / 2, cyF = (y0 + y1) / 2, mU = ULT && (DB.ajustes.zoomMapa || 0) > 0 ? mercator(ULT.lat, ULT.lon) : null, cx = mU ? mU[0] : cxF, cy = mU ? mU[1] : cyF;      // al acercar con el GPS encendido, la vista sigue su posición   // px por unidad de mundo
+  const X = u => W / 2 + (u - cx) * sc, Y = u => H / 2 + (u - cy) * sc, pt = (lat, lon) => { const m = mercator(lat, lon); return [X(m[0]), Y(m[1])]; };
+  let s = `<svg class="mapa" viewBox="0 0 ${W} ${H}" role="img" aria-label="Mapa de los puntos"><rect width="${W}" height="${H}" fill="#eef1f7"/>`;
+  s += teselas(cx, cy, sc, W, H);
   const lin = ps => ps.map((p, i) => { const q = pt(p[0], p[1]); return (i ? "L" : "M") + q[0].toFixed(1) + "," + q[1].toFixed(1); }).join("");
-  for (let i = 1; i < c.puntos.length; i++) { const a = c.puntos[i - 1], b = c.puntos[i]; if (!tramoEntre(a.id, b.id) && isFinite(a.lat) && isFinite(b.lat)) s += `<path d="${lin([[a.lat, a.lon], [b.lat, b.lon]])}" fill="none" stroke="#fff" stroke-width="5" opacity=".8"/><path d="${lin([[a.lat, a.lon], [b.lat, b.lon]])}" fill="none" stroke="#5b6577" stroke-width="2.5" stroke-dasharray="6 5"/>`; }
-  tr.forEach(t => { s += `<path d="${lin(t.pts)}" fill="none" stroke="#fff" stroke-width="6" opacity=".85" stroke-linejoin="round"/><path d="${lin(t.pts)}" fill="none" stroke="#1F3864" stroke-width="3" stroke-linejoin="round"/>`; });
-  if (REC && REC.pts.length > 1) s += `<path d="${lin(REC.pts)}" fill="none" stroke="#fff" stroke-width="7" stroke-linejoin="round"/><path d="${lin(REC.pts)}" fill="none" stroke="#c0392b" stroke-width="3.5" stroke-linejoin="round"/>`;
+  for (let i = 1; i < c.puntos.length; i++) { const a = c.puntos[i - 1], b = c.puntos[i]; if (!(tramoEntre(a.id, b.id) || {}).linea && isFinite(a.lat) && isFinite(b.lat)) s += `<path d="${lin([[a.lat, a.lon], [b.lat, b.lon]])}" fill="none" stroke="#fff" stroke-width="5" opacity=".8"/><path d="${lin([[a.lat, a.lon], [b.lat, b.lon]])}" fill="none" stroke="#5b6577" stroke-width="2.5" stroke-dasharray="6 5"/>`; }
+  tr.forEach(t => { s += `<path d="${lin(t.linea)}" fill="none" stroke="#fff" stroke-width="6" opacity=".85" stroke-linejoin="round"/><path d="${lin(t.linea)}" fill="none" stroke="#1F3864" stroke-width="3" stroke-linejoin="round"/>`; });
   const col = {inyeccion: "#c0392b", monitoreo: "#1F3864", vertimiento: "#8e44ad", afluente: "#2e8b57", muestreo: "#d35400", otro: "#777"};
   P.forEach(p => { const q = pt(p.lat, p.lon), i = c.puntos.indexOf(p) + 1, der = q[0] < W - 150, tx = der ? q[0] + 11 : q[0] - 11;
     s += `<circle cx="${q[0].toFixed(1)}" cy="${q[1].toFixed(1)}" r="7" fill="${col[p.rol] || "#777"}" stroke="#fff" stroke-width="2.5"/><text x="${tx.toFixed(1)}" y="${(q[1] - 9).toFixed(1)}" text-anchor="${der ? "start" : "end"}" style="font-size:12px;font-weight:600;paint-order:stroke;stroke:#fff;stroke-width:3.5px;stroke-linejoin:round;fill:#1d2433">${i}. ${esc(p.nombre)}</text>`; });
@@ -230,17 +228,6 @@ function pendienteEntre(iA, iB) {            // iA aguas arriba, iB aguas abajo:
 function pendienteGPS(iA, iB) {      // preliminar: con la altitud del GPS. iA aguas arriba, iB aguas abajo
   const c = C(), a = c.puntos[iA], b = c.puntos[iB]; if (!a || !b) return null;
   const A = abscisas(), d = A[iB] !== null && A[iA] !== null ? A[iB] - A[iA] : null; if (!(d > 0)) return null;
-  const t = iB === iA + 1 ? tramoEntre(a.id, b.id) : null;
-  if (t) {                                  // regresión de la altitud contra la distancia recorrida, con todas las lecturas del tramo
-    let s = 0, X = [], Z = [];
-    t.pts.forEach((q, k) => { if (k) s += hav(t.pts[k - 1], q); if (q[4] != null && isFinite(q[4]) && q[3] > 0) { X.push(s); Z.push(q[4]); } });
-    const L = s, n = X.length; if (n >= 10 && L >= 30) {
-      const xs = t.de === a.id ? X : X.map(x => L - x), mx = xs.reduce((u, v) => u + v, 0) / n, mz = Z.reduce((u, v) => u + v, 0) / n;
-      const sxx = xs.reduce((u, x) => u + (x - mx) ** 2, 0), sxz = xs.reduce((u, x, k) => u + (x - mx) * (Z[k] - mz), 0), m = sxz / sxx;
-      const sse = xs.reduce((u, x, k) => u + (Z[k] - mz - m * (x - mx)) ** 2, 0), se = Math.sqrt(sse / Math.max(n - 2, 1) / sxx);
-      return {s: -m, se: Math.max(se, 0.3 / L), d, dz: -m * L, fuente: `regresión de la altitud del GPS en ${n} lecturas del recorrido`};
-    }
-  }
   if (a.alt_gps != null && b.alt_gps != null) { const ea = a.alt_acc && a.alt_acc < 99 ? a.alt_acc : 15, eb = b.alt_acc && b.alt_acc < 99 ? b.alt_acc : 15; return {s: (a.alt_gps - b.alt_gps) / d, se: Math.hypot(ea, eb) / d, d, dz: a.alt_gps - b.alt_gps, fuente: "altitud del GPS en los dos puntos"}; }
   return null;
 }
@@ -264,122 +251,111 @@ function pintarPuntos() {
     <div class="card"><div class="fila"><label>Nombre del nuevo punto<input id="pt-nombre" type="text" placeholder="p. ej. Inyección, Estación 1…"></label><label>Función<select id="pt-rol">${ROLES.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select></label></div>
     <div style="display:flex;gap:.5rem;margin-top:.5rem;flex-wrap:wrap"><button class="b" id="pt-fijar" style="flex:2">📍 Marcar punto aquí (GPS)</button><button class="b g" id="pt-manual" style="flex:1">Escribir coordenadas</button></div>
     <p class="nota">El GPS promedia ${DB.ajustes.seg_promedio} s para mejorar la precisión. Quédese quieto en el punto.</p></div>
-    ${c.puntos.length ? "<h2>Mapa</h2>" + selectorFondo() + '<div id="mapa-caja">' + mapaSVG() + "</div>" : ""}
+    ${c.puntos.length ? "<h2>Mapa</h2>" + selectorFondo() + '<div id="mapa-caja">' + mapaSVG() + "</div><h2>Distancias entre puntos</h2>" + distanciasHtml() : ""}
     <h2>Puntos (${c.puntos.length})</h2>${filas || '<p class="nota">Aún no hay puntos.</p>'}
     <div style="display:flex;gap:.5rem;flex-wrap:wrap"><button class="b g p" id="pt-inv">⇅ Invertir el orden</button></div>
-    <details class="card"><summary><b>Ajustes del GPS</b></summary><div class="fila" style="margin-top:.4rem"><label>Precisión máxima aceptada (m)<input id="aj-acc" type="text" inputmode="text" value="${DB.ajustes.acc_max}"></label><label>Paso mínimo entre lecturas (m)<input id="aj-paso" type="text" inputmode="text" value="${DB.ajustes.paso_min}"></label><label>Segundos de promedio por punto<input id="aj-seg" type="text" inputmode="text" value="${DB.ajustes.seg_promedio}"></label></div></details>`;
+    <details class="card"><summary><b>Ajustes del GPS</b></summary><div class="fila" style="margin-top:.4rem"><label>Segundos de promedio por punto<input id="aj-seg" type="text" inputmode="text" value="${DB.ajustes.seg_promedio}"></label></div></details>`;
   const nuevoPunto = (lat, lon, acc, alt, altAcc) => { const nom = $("pt-nombre").value.trim() || "Punto " + (c.puntos.length + 1); const rol = $("pt-rol").value; c.puntos.push({id: pid(), nombre: nom, rol, lat, lon, acc: acc === null ? null : Math.round(acc), alt_gps: alt ?? null, alt_acc: altAcc ?? null, cota: alt != null ? Math.round(alt * 10) / 10 : null, cota_origen: alt != null ? "gps" : null, hora_iso: new Date().toISOString(), notas: "", hid: {}}); guardar(); pintarPuntos(); };
   $("pt-fijar").onclick = async () => { try { $("pt-fijar").disabled = true; const r = await fijarPunto(DB.ajustes.seg_promedio); nuevoPunto(r.lat, r.lon, r.acc, r.alt, r.altAcc); } catch (e) { alert(e.message); pintarPuntos(); } };
   $("pt-manual").onclick = () => { const t = prompt("Latitud, longitud en grados decimales (p. ej. 4.53596, -74.54319):"); if (!t) return; const m = parseCoord(t); if (!m || Math.abs(m[0]) > 90 || Math.abs(m[1]) > 180) return alert("No se entendió. Escriba: latitud, longitud (p. ej. 4.53596, -74.54319)."); nuevoPunto(m[0], m[1], null); };
   document.querySelectorAll("[data-sube]").forEach(b => b.onclick = () => { const i = +b.dataset.sube; [c.puntos[i - 1], c.puntos[i]] = [c.puntos[i], c.puntos[i - 1]]; guardar(); pintarPuntos(); });
   document.querySelectorAll("[data-baja]").forEach(b => b.onclick = () => { const i = +b.dataset.baja; [c.puntos[i + 1], c.puntos[i]] = [c.puntos[i], c.puntos[i + 1]]; guardar(); pintarPuntos(); });
-  document.querySelectorAll("#t-pun [data-q]").forEach(b => b.onclick = () => { if (confirm("¿Quitar «" + c.puntos[+b.dataset.q].nombre + "»? Se borran también los recorridos que lo tocan.")) { const id = c.puntos[+b.dataset.q].id; c.puntos.splice(+b.dataset.q, 1); c.tramos = c.tramos.filter(t => t.de !== id && t.a !== id); guardar(); pintarPuntos(); } });
+  document.querySelectorAll("#t-pun [data-q]").forEach(b => b.onclick = () => { if (confirm("¿Quitar «" + c.puntos[+b.dataset.q].nombre + "»? Se borran también las distancias que lo tocan.")) { const id = c.puntos[+b.dataset.q].id; c.puntos.splice(+b.dataset.q, 1); c.tramos = c.tramos.filter(t => t.de !== id && t.a !== id); guardar(); pintarPuntos(); } });
   document.querySelectorAll("[data-reubicar]").forEach(b => b.onclick = async () => { try { b.disabled = true; b.textContent = "Midiendo… quédese quieto"; const r = await fijarPunto(DB.ajustes.seg_promedio), p = c.puntos[+b.dataset.reubicar]; p.lat = r.lat; p.lon = r.lon; p.acc = Math.round(r.acc); p.alt_gps = r.alt; p.alt_acc = r.altAcc; if (r.alt != null && p.cota_origen !== "manual") { p.cota = Math.round(r.alt * 10) / 10; p.cota_origen = "gps"; } guardar(); pintarPuntos(); } catch (e) { alert(e.message); pintarPuntos(); } });
   document.querySelectorAll("[data-usaralt]").forEach(b => b.onclick = () => { const p = c.puntos[+b.dataset.usaralt]; p.cota = Math.round(p.alt_gps * 10) / 10; p.cota_origen = "gps"; guardar(); pintarPuntos(); });
+  document.querySelectorAll("#t-pun [data-man]").forEach(i => i.onchange = () => { const [a, b] = i.dataset.man.split("|"), v = num(i.value); if (Number.isNaN(v)) { i.style.borderColor = "var(--ro)"; return; } const t = tramoPar(a, b); t.manual_m = v > 0 ? v : null; t.origen = v > 0 ? "escrita" : null; t.linea = null; guardar(); pintarPuntos(); });
+  document.querySelectorAll("#t-pun [data-medir]").forEach(b => b.onclick = () => { const [a, z] = b.dataset.medir.split("|"); medirEnMapa(a, z); });
   $("pt-inv").onclick = () => { c.puntos.reverse(); guardar(); pintarPuntos(); };
-  [["aj-acc", "acc_max"], ["aj-paso", "paso_min"], ["aj-seg", "seg_promedio"]].forEach(([i, k]) => $(i).onchange = () => { DB.ajustes[k] = Math.max(1, num($(i).value) || AJ0[k]); guardar(); });
+  [["aj-seg", "seg_promedio"]].forEach(([i, k]) => $(i).onchange = () => { DB.ajustes[k] = Math.max(1, num($(i).value) || AJ0[k]); guardar(); });
 }
 
-// ------------------------------------------------------------------ RECORRIDO
-function pintarRecorrido() {
-  const c = C(), el = $("t-rec");
-  if (TAB !== "rec") return;
-  if (REC && $("rec-vivo")) { $("rec-vivo").innerHTML = vivo(); $("rec-mapa").innerHTML = mapaSVG(); return; }
-  const sel = (id, ex) => `<select id="${id}">${c.puntos.map((p, i) => `<option value="${p.id}">${i + 1}. ${esc(p.nombre)}</option>`).join("")}${ex || ""}</select>`;
-  const L = enlaces();
-  const tabla = c.puntos.length > 1 ? '<div class="scroll"><table><thead><tr><th>Tramo</th><th class="num">Distancia (m)</th><th>De dónde</th><th>Escribir (m)</th></tr></thead><tbody>' + c.puntos.slice(1).map((p, i) => { const t = tramoEntre(c.puntos[i].id, p.id); return `<tr><td>${i + 1}. ${esc(c.puntos[i].nombre)} → ${i + 2}. ${esc(p.nombre)}</td><td class="num"><b>${nf(L[i].d, 0)}</b></td><td>${L[i].origen}${t ? ` (${t.pts.length} lecturas)` : ""}</td><td>${t ? `<input data-man="${t.id}" type="text" inputmode="text" autocomplete="off" style="width:6rem" value="${t.manual_m || ""}">` : "—"}</td></tr>`; }).join("") + "</tbody></table></div>" : '<p class="nota">Necesita al menos dos puntos.</p>';
-  el.innerHTML = REC ? `<div class="card rec"><b>● Grabando el recorrido</b><div id="rec-vivo">${vivo()}</div>
-      <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem"><button class="b" id="rec-marca" style="flex:2">📍 Marcar punto aquí (cierra el tramo)</button><button class="b r" id="rec-stop" style="flex:1">■ Detener</button></div></div>${selectorFondo()}<div id="rec-mapa">${mapaSVG()}</div>` :
-    `<p class="nota">Camine por la orilla <b>siguiendo el cauce</b> de un punto al siguiente con el GPS grabando: la distancia del tramo es la longitud de lo caminado. Mantenga la pantalla encendida (la app la protege del apagado mientras graba) y la app abierta.</p>
-    <div class="card"><b>Iniciar el recorrido donde esté parado</b><p class="nota">Puede empezar en cualquier lugar: al iniciar, la app le pregunta si ese lugar es alguno de los puntos ya marcados o si hay que marcarlo como punto nuevo (del ensayo de trazadores, de muestreo o de ambos). Durante el recorrido use «Marcar punto aquí» cada vez que llegue a un punto.</p>
-    <button class="b" id="rec-go" style="width:100%;margin-top:.5rem">● Iniciar recorrido</button></div>
-    <h2>Mapa</h2>${selectorFondo()}<div id="mapa-caja">${mapaSVG()}</div><h2>Distancias entre puntos</h2>${tabla}
-    <p class="nota">La distancia por GPS suele sobreestimar un poco el camino en tramos cortos (ruido de ±3 a ±10 m). Para tramos muy cortos mida con cinta o escriba la distancia en la última columna; esa prevalece.</p>`;
-  if ($("rec-go")) $("rec-go").onclick = () => { if (!iniciarGPS()) return; REC = {de: null, pts: ULT && Date.now() - ULT.t < 20000 ? [[ULT.lat, ULT.lon, Date.now(), Math.round(ULT.acc), ULT.alt ?? null]] : [], t0: Date.now()}; pintarRecorrido(); preguntarInicio(false); };
-  if ($("rec-marca")) $("rec-marca").onclick = marcarEnRecorrido;
-  if ($("rec-stop")) $("rec-stop").onclick = detenerRecorrido;
-  el.querySelectorAll("[data-man]").forEach(i => i.onchange = () => { const t = c.tramos.find(x => x.id === i.dataset.man); t.manual_m = num(i.value) > 0 ? num(i.value) : null; guardar(); pintarRecorrido(); });
+// ------------------------------------------------------------------ DISTANCIA REAL ENTRE PUNTOS (escrita a mano o medida sobre el mapa)
+// La app ya no graba recorridos: calcula la línea recta entre puntos consecutivos y la distancia real por el cauce se escribe o se mide
+// sobre el mapa (con internet) tocando los vértices del cauce, como la regla de Google Earth. Si no hay distancia real, se usa la recta.
+function tramoPar(a, b) {
+  const c = C(); let t = tramoEntre(a, b);
+  if (!t) { t = {id: "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 4), de: a, a: b, pts: [], dist_m: null, manual_m: null, linea: null}; c.tramos.push(t); }
+  return t;
 }
-function vivo() { const d = longitud(REC.pts), s = Math.floor((Date.now() - REC.t0) / 1000); return `<div class="kpi" style="margin-top:.4rem"><div><span class="nota">Distancia del tramo</span><b>${nf(d, 0)} m</b></div><div><span class="nota">Lecturas</span><b>${REC.pts.length}</b></div><div><span class="nota">Tiempo</span><b>${pad(Math.floor(s / 60))}:${pad(s % 60)}</b></div></div><p class="nota">${ULT ? "GPS ±" + Math.round(ULT.acc) + " m" + (ULT.acc > DB.ajustes.acc_max ? " — precisión baja: no se están guardando lecturas" : "") : "Esperando señal…"}</p>`; }
-function cerrarTramo(aId) { const c = C(), pts = REC.pts.slice(); const p = punto(aId); if (p) pts.push([p.lat, p.lon, Date.now(), 0]); c.tramos.push({id: "t" + Date.now().toString(36), de: REC.de, a: aId, pts, dist_m: longitud(pts), manual_m: null}); }
-// Ventana para asignar un punto recién marcado: ensayo de trazadores (va en «Puntos»), muestreo de calidad (va en «Muestreo») o ambos
-function modalAsignar(o) {
-  return new Promise(res => {
-    const sitios = typeof SITIOS_M !== "undefined" ? SITIOS_M : [], v = document.createElement("div");
-    v.style.cssText = "position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:1rem;overflow:auto";
-    const chk = "flex-direction:row;align-items:center;gap:.5rem;color:#1d2433;font-size:.95rem;margin-top:.4rem";
-    v.innerHTML = `<div style="background:#fff;border-radius:.7rem;padding:1rem;max-width:26rem;width:100%"><b>${esc(o.titulo)}</b>
-      <label style="margin-top:.5rem">Nombre del punto<input id="am-nom" type="text" value="${esc(o.nombre)}"></label>
-      <p class="nota" style="margin-top:.6rem"><b>¿Para qué es este punto?</b> Puede ser para las dos cosas.</p>
-      <label style="${chk}"><input id="am-t" type="checkbox" style="width:auto" checked> Ensayo de trazadores (queda en «Puntos»)</label>
-      <label id="am-tl" style="margin-left:1.6rem">Función en el ensayo<select id="am-trol">${ROLES.filter(r => r[0] !== "muestreo").map(([k, t]) => `<option value="${k}"${k === (o.rol || "monitoreo") ? " selected" : ""}>${t}</option>`).join("")}</select></label>
-      ${sitios.length ? `<label style="${chk}"><input id="am-m" type="checkbox" style="width:auto"> Muestreo de calidad (queda en «Muestreo»)</label>
-      <label id="am-ml" style="margin-left:1.6rem;display:none">Sitio de muestreo<select id="am-msel">${sitios.map(x => `<option value="${x.k}">${esc(x.n)}${punto(sitioM(x.k).punto_id) ? " (ya tiene punto)" : ""}</option>`).join("")}</select></label>` : ""}
-      <div style="display:flex;gap:.5rem;margin-top:.8rem"><button class="b" id="am-ok" style="flex:1">Aceptar</button><button class="b g" id="am-no" style="flex:1">${esc(o.cancelar || "Cancelar")}</button></div></div>`;
-    document.body.appendChild(v);
-    const q = id => v.querySelector("#" + id), alt = () => { q("am-tl").style.display = q("am-t").checked ? "" : "none"; if (q("am-m")) q("am-ml").style.display = q("am-m").checked ? "" : "none"; };
-    v.addEventListener("change", alt);
-    q("am-no").onclick = () => { v.remove(); res(null); };
-    q("am-ok").onclick = () => {
-      const t = q("am-t").checked, m = q("am-m") ? q("am-m").checked : false; if (!t && !m) return alert("Elija para qué es el punto: ensayo de trazadores, muestreo o ambos.");
-      const r = {nombre: q("am-nom").value.trim() || o.nombre, traz: t ? q("am-trol").value : null, mue: m ? q("am-msel").value : null};
-      if (r.mue && punto(sitioM(r.mue).punto_id) && !confirm("Ese sitio de muestreo ya tiene un punto asignado («" + punto(sitioM(r.mue).punto_id).nombre + "»). ¿Reemplazarlo por este?")) return;
-      v.remove(); res(r);
-    };
-  });
+function distanciasHtml() {
+  const c = C(), P = c.puntos; if (P.length < 2) return '<p class="nota">Necesita al menos dos puntos.</p>';
+  const filas = P.slice(1).map((b, i) => {
+    const a = P[i], t = tramoEntre(a.id, b.id), recta = hav([a.lat, a.lon], [b.lat, b.lon]), real = t && t.manual_m > 0 ? t.manual_m : null;
+    const aviso = real !== null && real < recta * 0.98 ? ' <b style="color:var(--ro)">⚠ menor que la recta</b>' : "";
+    const usa = real === null ? "usa la línea recta" : (t.origen === "mapa" ? "medida en el mapa" : "escrita") + (real >= recta ? " · sinuosidad " + nf(real / recta, 2) : "");
+    return `<tr><td>${i + 1}. ${esc(a.nombre)} → ${i + 2}. ${esc(b.nombre)}</td><td class="num">${nf(recta, 0)}</td><td><input data-man="${a.id}|${b.id}" type="text" inputmode="text" autocomplete="off" style="width:6rem" value="${real === null ? "" : Number(real.toFixed(1))}" placeholder="m"><div class="nota">${usa}${aviso}</div></td><td><button class="b g p" data-medir="${a.id}|${b.id}">🗺 Medir en el mapa</button></td></tr>`;
+  }).join("");
+  return `<div class="scroll"><table><thead><tr><th>Tramo</th><th class="num">Línea recta (m)</th><th>Distancia real por el cauce (m)</th><th></th></tr></thead><tbody>${filas}</tbody></table></div>
+    <p class="nota">La <b>línea recta</b> se calcula con las coordenadas. La <b>distancia real</b> la escribe usted (cinta, estimación) o la mide en el mapa tocando el cauce punto a punto (necesita internet para ver la imagen). Si la deja vacía, los cálculos usan la línea recta.</p>`;
 }
-function crearPuntoAsignado(f, d, despuesDe) {          // f: posición {lat, lon, acc, alt, altAcc}; d: resultado de modalAsignar; despuesDe: id del punto tras el cual se inserta (si no, al final)
-  const c = C(), rol = d.traz || (d.mue === "vertimiento" ? "vertimiento" : "muestreo");
-  const p = {id: pid(), nombre: d.nombre, rol, lat: f.lat, lon: f.lon, acc: f.acc == null ? null : Math.round(f.acc), alt_gps: f.alt ?? null, alt_acc: f.altAcc ?? null, cota: f.alt != null ? Math.round(f.alt * 10) / 10 : null, cota_origen: f.alt != null ? "gps" : null, hora_iso: new Date().toISOString(), notas: "", hid: {}};
-  const i = despuesDe ? c.puntos.findIndex(x => x.id === despuesDe) : -1;
-  if (i >= 0) c.puntos.splice(i + 1, 0, p); else c.puntos.push(p);
-  if (d.mue && typeof sitioM === "function") sitioM(d.mue).punto_id = p.id;
-  guardar(); return p;
+function medirEnMapa(idA, idB) {
+  const A = punto(idA), B = punto(idB);
+  if (!A || !B || !isFinite(A.lat) || !isFinite(B.lat)) return alert("Los dos puntos necesitan coordenadas.");
+  const t0 = tramoEntre(idA, idB), recta = hav([A.lat, A.lon], [B.lat, B.lon]);
+  let inter = t0 && t0.linea && t0.linea.length > 2 ? (t0.de === idA ? t0.linea : t0.linea.slice().reverse()).slice(1, -1).map(p => [p[0], p[1]]) : [];
+  if (DB.ajustes.fondo === "ninguno" || !FONDOS[DB.ajustes.fondo]) { DB.ajustes.fondo = "satelite"; guardar(true); }
+  const v = document.createElement("div"); v.style.cssText = "position:fixed;inset:0;z-index:50;background:#fff;display:flex;flex-direction:column";
+  v.innerHTML = `<div style="padding:.5rem .8rem;background:var(--az);color:#fff"><b>Medir: ${esc(A.nombre)} → ${esc(B.nombre)}</b><div id="med-d" style="font-size:1.1rem;font-weight:600"></div></div>
+    <div id="med-caja" style="flex:1;position:relative;overflow:hidden;touch-action:none;background:#eef1f7"></div>
+    <div style="padding:.4rem .6rem calc(.4rem + env(safe-area-inset-bottom));border-top:1px solid var(--bd);background:#fff">
+      <div class="nota" id="med-nota"></div>
+      <div style="display:flex;gap:.35rem;flex-wrap:wrap;align-items:center"><select id="med-fondo" style="width:auto"><option value="ninguno">Sin fondo</option>${Object.entries(FONDOS).map(([k, f]) => `<option value="${k}"${DB.ajustes.fondo === k ? " selected" : ""}>${f.t}</option>`).join("")}</select><button class="b g p" id="med-menos">−</button><button class="b g p" id="med-mas">+</button><button class="b g p" id="med-gps">📍 Dónde estoy</button><button class="b g p" id="med-undo">↶ Deshacer</button><button class="b g p" id="med-clr">Borrar</button></div>
+      <div style="display:flex;gap:.5rem;margin-top:.4rem"><button class="b" id="med-ok" style="flex:2">Aceptar esta distancia</button><button class="b g" id="med-no" style="flex:1">Cancelar</button></div></div>`;
+  document.body.appendChild(v);
+  const caja = v.querySelector("#med-caja"), q = id => v.querySelector("#" + id), W = caja.clientWidth || 360, H = caja.clientHeight || 400;
+  const ruta = () => [[A.lat, A.lon], ...inter, [B.lat, B.lon]], mA = mercator(A.lat, A.lon), mB = mercator(B.lat, B.lon), mPorU = 40075016.686 * Math.cos(rad(A.lat));
+  const todos = [mA, mB, ...inter.map(p => mercator(p[0], p[1]))], xs = todos.map(p => p[0]), ys = todos.map(p => p[1]), minU = 60 / mPorU;
+  const dx = Math.max(Math.max(...xs) - Math.min(...xs), minU), dy = Math.max(Math.max(...ys) - Math.min(...ys), minU);
+  let cx = (Math.max(...xs) + Math.min(...xs)) / 2, cy = (Math.max(...ys) + Math.min(...ys)) / 2, sc = Math.min((W - 100) / dx, (H - 100) / dy);
+  const sc0 = sc, limitar = () => { sc = Math.max(sc0 / 64, Math.min(256 * 2 ** 22, sc)); };
+  const dibujar = () => {
+    const X = u => W / 2 + (u - cx) * sc, Y = u => H / 2 + (u - cy) * sc, pt = (la, lo) => { const m = mercator(la, lo); return [X(m[0]), Y(m[1])]; };
+    const lin = ps => ps.map((p, i) => { const z = pt(p[0], p[1]); return (i ? "L" : "M") + z[0].toFixed(1) + "," + z[1].toFixed(1); }).join("");
+    let s = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="display:block"><rect width="${W}" height="${H}" fill="#eef1f7"/>` + teselas(cx, cy, sc, W, H);
+    s += `<path d="${lin([[A.lat, A.lon], [B.lat, B.lon]])}" fill="none" stroke="#fff" stroke-width="4" opacity=".8"/><path d="${lin([[A.lat, A.lon], [B.lat, B.lon]])}" fill="none" stroke="#5b6577" stroke-width="2" stroke-dasharray="6 5"/>`;
+    s += `<path d="${lin(ruta())}" fill="none" stroke="#fff" stroke-width="7" stroke-linejoin="round"/><path d="${lin(ruta())}" fill="none" stroke="#c0392b" stroke-width="3.5" stroke-linejoin="round"/>`;
+    C().puntos.forEach(p => { if (p.id === idA || p.id === idB || !isFinite(p.lat)) return; const z = pt(p.lat, p.lon); s += `<circle cx="${z[0].toFixed(1)}" cy="${z[1].toFixed(1)}" r="5" fill="#777" stroke="#fff" stroke-width="2"/>`; });
+    inter.forEach((p, i) => { const z = pt(p[0], p[1]); s += `<circle cx="${z[0].toFixed(1)}" cy="${z[1].toFixed(1)}" r="5" fill="#fff" stroke="#c0392b" stroke-width="2.5"/>`; });
+    [[A, "A"], [B, "B"]].forEach(([p, e]) => { const z = pt(p.lat, p.lon); s += `<circle cx="${z[0].toFixed(1)}" cy="${z[1].toFixed(1)}" r="9" fill="${e === "A" ? "#1F3864" : "#2e8b57"}" stroke="#fff" stroke-width="3"/><text x="${(z[0] + 13).toFixed(1)}" y="${(z[1] - 10).toFixed(1)}" style="font-size:13px;font-weight:700;paint-order:stroke;stroke:#fff;stroke-width:4px;fill:#1d2433">${e}. ${esc(p.nombre)}</text>`; });
+    if (ULT) { const z = pt(ULT.lat, ULT.lon); s += `<circle cx="${z[0].toFixed(1)}" cy="${z[1].toFixed(1)}" r="6" fill="#2b8cff" stroke="#fff" stroke-width="2.5"/>`; }
+    const mPx = mPorU / sc, barra = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000].find(x => x / mPx >= 70) || 5000, bw = barra / mPx;
+    s += `<rect x="8" y="${H - 34}" width="${bw + 16}" height="26" rx="4" fill="#fff" opacity=".85"/><line x1="16" y1="${H - 14}" x2="${16 + bw}" y2="${H - 14}" stroke="#1d2433" stroke-width="2.5"/><text x="16" y="${H - 19}" style="font-size:11px;fill:#1d2433">${barra >= 1000 ? barra / 1000 + " km" : barra + " m"}</text>`;
+    const fo = FONDOS[DB.ajustes.fondo]; if (fo) s += `<text x="${W - 6}" y="${H - 6}" text-anchor="end" style="font-size:10px;paint-order:stroke;stroke:#fff;stroke-width:3px;fill:#333">${fo.atr}</text>`;
+    caja.innerHTML = s + "</svg>";
+    const L = longitud(ruta());
+    q("med-d").innerHTML = inter.length ? `${nf(L, 1)} m por el cauce <span style="font-weight:400;font-size:.85rem">(línea recta ${nf(recta, 0)} m · ${inter.length} vértice${inter.length === 1 ? "" : "s"})</span>` : `<span style="font-weight:400;font-size:.9rem">Línea recta ${nf(recta, 0)} m. Toque el mapa siguiendo el cauce de A a B.</span>`;
+    q("med-undo").disabled = !inter.length; q("med-clr").disabled = !inter.length;
+  };
+  let pend = false; const pedir = () => { if (!pend) { pend = true; requestAnimationFrame(() => { pend = false; dibujar(); }); } };
+  const aMundo = (px, py) => { const r = caja.getBoundingClientRect(); return [cx + (px - r.left - W / 2) / sc, cy + (py - r.top - H / 2) / sc]; };
+  const aLatLon = (x, y) => [Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI, x * 360 - 180];
+  const zoomEn = (px, py, f) => { const w = aMundo(px, py), r = caja.getBoundingClientRect(); sc *= f; limitar(); cx = w[0] - (px - r.left - W / 2) / sc; cy = w[1] - (py - r.top - H / 2) / sc; };
+  const ptrs = new Map(); let movio = false, ini = null;
+  caja.onpointerdown = e => { try { caja.setPointerCapture(e.pointerId); } catch (x) {} ptrs.set(e.pointerId, [e.clientX, e.clientY]); if (ptrs.size === 1) { movio = false; ini = [e.clientX, e.clientY]; } else movio = true; };
+  caja.onpointermove = e => {
+    if (!ptrs.has(e.pointerId)) return; const old = ptrs.get(e.pointerId), nw = [e.clientX, e.clientY];
+    if (ptrs.size === 1) { if (!movio && Math.hypot(nw[0] - ini[0], nw[1] - ini[1]) < 8) return; movio = true; cx -= (nw[0] - old[0]) / sc; cy -= (nw[1] - old[1]) / sc; }
+    else if (ptrs.size === 2) { const otro = [...ptrs.entries()].find(([k]) => k !== e.pointerId)[1], d0 = Math.hypot(old[0] - otro[0], old[1] - otro[1]), d1 = Math.hypot(nw[0] - otro[0], nw[1] - otro[1]); if (d0 < 1) return;
+      const m0 = [(old[0] + otro[0]) / 2, (old[1] + otro[1]) / 2], m1 = [(nw[0] + otro[0]) / 2, (nw[1] + otro[1]) / 2], w = aMundo(m0[0], m0[1]), r = caja.getBoundingClientRect();
+      sc *= d1 / d0; limitar(); cx = w[0] - (m1[0] - r.left - W / 2) / sc; cy = w[1] - (m1[1] - r.top - H / 2) / sc; }
+    ptrs.set(e.pointerId, nw); pedir();
+  };
+  const suelta = e => { if (!ptrs.has(e.pointerId)) return; const era1 = ptrs.size === 1; ptrs.delete(e.pointerId); if (era1 && !movio && e.type === "pointerup") { const w = aMundo(e.clientX, e.clientY); inter.push(aLatLon(w[0], w[1])); pedir(); } };
+  caja.onpointerup = suelta; caja.onpointercancel = suelta;
+  caja.addEventListener("wheel", e => { e.preventDefault(); zoomEn(e.clientX, e.clientY, e.deltaY < 0 ? 1.25 : 0.8); pedir(); }, {passive: false});
+  const r0 = () => { const r = caja.getBoundingClientRect(); return [r.left + W / 2, r.top + H / 2]; };
+  q("med-mas").onclick = () => { const c0 = r0(); zoomEn(c0[0], c0[1], 1.6); pedir(); }; q("med-menos").onclick = () => { const c0 = r0(); zoomEn(c0[0], c0[1], 1 / 1.6); pedir(); };
+  q("med-undo").onclick = () => { inter.pop(); pedir(); }; q("med-clr").onclick = () => { inter = []; pedir(); };
+  q("med-gps").onclick = () => { if (!iniciarGPS()) return; if (!ULT) { q("med-nota").textContent = "Esperando la señal del GPS…"; return; } const m = mercator(ULT.lat, ULT.lon); cx = m[0]; cy = m[1]; pedir(); };
+  q("med-fondo").onchange = () => { DB.ajustes.fondo = q("med-fondo").value; guardar(true); pedir(); };
+  q("med-nota").textContent = navigator.onLine === false ? "⚠ Sin internet: no se ve la imagen del mapa. Puede escribir la distancia a mano." : "Arrastre para mover, pellizque o use +/− para acercar. Cada toque agrega un vértice; el último toque va antes de B.";
+  q("med-no").onclick = () => v.remove();
+  q("med-ok").onclick = () => {
+    if (!inter.length && !confirm("No marcó ningún vértice: la distancia sería la línea recta (" + nf(recta, 0) + " m). ¿Aceptarla como distancia real?")) return;
+    const t = tramoPar(idA, idB), r = ruta(); t.linea = t.de === idA ? r : r.slice().reverse(); t.manual_m = Math.round(longitud(r) * 10) / 10; t.origen = "mapa"; guardar(); v.remove(); pintarPuntos();
+  };
+  dibujar();
 }
-// Al iniciar (o al marcar el primer punto, o al detener) pregunta si el inicio del recorrido corresponde a algún punto
-function preguntarInicio(obligatoria) {
-  return new Promise(res => {
-    const c = C(), v = document.createElement("div"), dameIni = () => REC && REC.pts[0] ? {lat: REC.pts[0][0], lon: REC.pts[0][1], acc: REC.pts[0][3] || null, alt: REC.pts[0][4] ?? null} : (ULT ? {lat: ULT.lat, lon: ULT.lon, acc: Math.round(ULT.acc), alt: ULT.alt ?? null, altAcc: ULT.altAcc ?? null} : null), ini0 = dameIni();
-    v.style.cssText = "position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:1rem;overflow:auto";
-    v.innerHTML = `<div style="background:#fff;border-radius:.7rem;padding:1rem;max-width:26rem;width:100%"><b>¿El inicio del recorrido corresponde a algún punto?</b>
-      <p class="nota">Está empezando en su ubicación actual${ini0 && ini0.acc ? " (±" + ini0.acc + " m)" : ""}.</p>
-      ${c.puntos.length ? `<label>Es un punto ya marcado<select id="pi-sel">${c.puntos.map((p, k) => `<option value="${p.id}">${k + 1}. ${esc(p.nombre)}</option>`).join("")}</select></label><button class="b" id="pi-si" style="width:100%;margin-top:.4rem">Sí, es ese punto</button>` : ""}
-      <button class="b ${c.puntos.length ? "g" : ""}" id="pi-nuevo" style="width:100%;margin-top:.4rem">No: marcar un punto nuevo aquí</button>
-      <button class="b g" id="pi-luego" style="width:100%;margin-top:.4rem">${obligatoria ? "Cancelar" : "Decidir después"}</button></div>`;
-    document.body.appendChild(v); const q = id => v.querySelector("#" + id), fin = ok => { v.remove(); res(ok); };
-    if (q("pi-si")) q("pi-si").onclick = () => { const p = punto(q("pi-sel").value); REC.de = p.id; REC.pts[0] = [p.lat, p.lon, Date.now(), 0]; fin(true); };
-    q("pi-nuevo").onclick = async () => {
-      const ini = dameIni(); if (!ini) { alert("Aún no hay señal del GPS: espere un momento e intente de nuevo."); return; }
-      v.style.display = "none"; const d = await modalAsignar({titulo: "Punto de inicio del recorrido", nombre: "Punto " + (c.puntos.length + 1)});
-      if (!d) { v.style.display = "flex"; return; }
-      const p = crearPuntoAsignado(ini, d, null); REC.de = p.id; REC.pts[0] = [p.lat, p.lon, Date.now(), 0]; fin(true);
-    };
-    q("pi-luego").onclick = () => fin(false);
-  });
-}
-async function marcarEnRecorrido() {
-  if (!ULT) return alert("Aún no hay señal del GPS.");
-  const f = {lat: ULT.lat, lon: ULT.lon, acc: ULT.acc, alt: ULT.alt ?? null, altAcc: ULT.altAcc ?? null, t: ULT.t};
-  if (!REC.de && !(await preguntarInicio(true))) return;
-  const d = await modalAsignar({titulo: "Marcar punto aquí", nombre: "Punto " + (C().puntos.length + 1)}); if (!d || !REC) return;
-  REC.pts.push([f.lat, f.lon, f.t, Math.round(f.acc), f.alt]);
-  const de = REC.de, p = crearPuntoAsignado(f, d, de);                 // queda justo después del punto de donde salió
-  cerrarTramo(p.id); REC = {de: p.id, pts: [[p.lat, p.lon, Date.now(), 0]], t0: Date.now()}; guardar(); pintarRecorrido();
-}
-async function detenerRecorrido() {
-  const c = C(), r = REC;
-  if (r && !r.de && r.pts.length >= 3) { const ok = await preguntarInicio(true); if (!ok && !confirm("Sin saber dónde empezó, el recorrido no se puede guardar. ¿Descartarlo?")) return; }
-  REC = null; if (!r || !r.de) { pintarRecorrido(); return; }
-  if (r.pts.length < 3) { pintarRecorrido(); return; }
-  $("t-rec").innerHTML = `<div class="card"><b>Recorrido detenido</b><p class="nota">${r.pts.length} lecturas, ${nf(longitud(r.pts), 0)} m. ¿En qué punto terminó?</p><div class="fila"><label>Punto de llegada<select id="rec-fin">${c.puntos.filter(p => p.id !== r.de).map(p => `<option value="${p.id}">${c.puntos.indexOf(p) + 1}. ${esc(p.nombre)}</option>`).join("")}<option value="__nuevo">— un punto nuevo aquí (mi ubicación) —</option></select></label></div>
-    <div style="display:flex;gap:.5rem;margin-top:.5rem"><button class="b" id="rec-ok">Guardar el tramo</button><button class="b g" id="rec-no">Descartar</button></div></div>`;
-  $("rec-ok").onclick = async () => {
-    let fin = $("rec-fin").value; if (!fin) return alert("Marque primero el punto de llegada.");
-    if (fin === "__nuevo") { const u = r.pts[r.pts.length - 1], d = await modalAsignar({titulo: "Punto de llegada", nombre: "Punto " + (c.puntos.length + 1)}); if (!d) return; fin = crearPuntoAsignado({lat: u[0], lon: u[1], acc: u[3] || null, alt: u[4] ?? null}, d, r.de).id; }
-    REC = r; cerrarTramo(fin); REC = null; guardar(); pintarRecorrido(); };
-  $("rec-no").onclick = () => pintarRecorrido();
-}
-setInterval(() => { if (REC && TAB === "rec" && $("rec-vivo")) $("rec-vivo").innerHTML = vivo(); }, 1000);
 
 // ------------------------------------------------------------------ PROGRAMAR
 let RES = null;
@@ -396,7 +372,7 @@ function pintarProg() {
   if (ii < 0) aviso = "Falta un punto con función «Inyección del trazador» (pestaña Puntos).";
   else if (!E.length) aviso = "No hay estaciones de monitoreo aguas abajo de la inyección. Marque las estaciones después de la inyección, en el orden del río.";
   const H = [["q_ls", "Caudal (L/s)"], ["ancho_m", "Ancho (m)"], ["prof_m", "Profundidad media (m)"], ["pendiente", "Pendiente (m/m; 0.03 = 3 %)"], ["ec_fondo", "EC de fondo (µS/cm)"], ["ruido", "Ruido ± (µS/cm)"], ["tiempo_tramo_s", "Tiempo de viaje del tramo (s), opcional"], ["d_l", "D_L medido (m²/s), opcional"]];
-  $("t-prog").innerHTML = `<p class="nota">Estima la masa de sal y los tiempos de registro (Fischer et al. 1979, pulso gaussiano). Las distancias salen del recorrido grabado; el caudal, ancho, profundidad y pendiente los mide o estima usted en el sitio (o los trae del modelo hidráulico). Es una estimación: D_L real puede variar de 2 a 5 veces.</p>
+  $("t-prog").innerHTML = `<p class="nota">Estima la masa de sal y los tiempos de registro (Fischer et al. 1979, pulso gaussiano). Las distancias salen de «Puntos» (distancia real por el cauce, o la línea recta si no la puso); el caudal, ancho, profundidad y pendiente los mide o estima usted en el sitio (o los trae del modelo hidráulico). Es una estimación: D_L real puede variar de 2 a 5 veces.</p>
     ${aviso ? '<div class="adv">⚠ ' + aviso + "</div>" : ""}
     ${E.map(e => { const i = c.puntos.findIndex(p => p.id === e.id); return `<div class="card"><div class="pt"><b>${esc(e.nombre)}</b><span class="badge">${e.x_m === null ? "sin distancia" : nf(e.x_m, 0) + " m desde la inyección"}</span></div><div class="fila" style="margin-top:.4rem">${H.map(([k, t]) => campo(t, `puntos.${i}.hid.${k}`, "n", c.puntos[i].hid?.[k])).join("")}</div>${pendienteHtml(i, ii)}</div>`; }).join("")}
     ${E.length > 1 ? '<button class="b g p" id="pr-copiar">Copiar los datos de la primera estación a las demás (vacíos)</button>' : ""}
@@ -673,15 +649,15 @@ function datosExport() {
   const c = C(), A = abscisas(), L = enlaces(), ii = c.puntos.findIndex(p => p.rol === "inyeccion");
   return {formato: "ccp-bitacora-trazadores", version: 2, proyecto_id: null, campana_id: c.id, exportado: new Date().toISOString(), campana: {nombre: c.nombre, fecha: c.fecha, responsable: c.responsable, cuadrilla: c.cuadrilla, clima: c.clima},
     inyeccion: {masa_kg: c.inyeccion.masa_kg, pureza: c.inyeccion.pureza, agua_l: c.inyeccion.agua_l, hora: c.inyeccion.hora, t0_iso: c.inyeccion.t0_iso, sal: c.inyeccion.sal, origen: c.inyeccion.origen || null, punto: c.puntos[ii]?.nombre || ""},
-    puntos: c.puntos.map((p, i) => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, precision_m: p.acc, cota: p.cota ?? null, cota_origen: p.cota_origen ?? null, alt_gps: p.alt_gps ?? null, alt_acc: p.alt_acc ?? null, notas: p.notas, abscisa_m: A[i], dist_anterior_m: i ? L[i - 1].d : null, origen_distancia: i ? L[i - 1].origen : null, dist_desde_inyeccion_m: ii >= 0 && A[i] !== null && A[ii] !== null ? A[i] - A[ii] : null, hidraulica: p.hid})),
+    puntos: c.puntos.map((p, i) => ({id: p.id, nombre: p.nombre, rol: p.rol, lat: p.lat, lon: p.lon, precision_m: p.acc, cota: p.cota ?? null, cota_origen: p.cota_origen ?? null, alt_gps: p.alt_gps ?? null, alt_acc: p.alt_acc ?? null, notas: p.notas, abscisa_m: A[i], dist_anterior_m: i ? L[i - 1].d : null, dist_recta_anterior_m: i ? L[i - 1].recta : null, origen_distancia: i ? L[i - 1].origen : null, dist_desde_inyeccion_m: ii >= 0 && A[i] !== null && A[ii] !== null ? A[i] - A[ii] : null, hidraulica: p.hid})),
     fotos: c.fotos || [], muestreo: typeof muestreoExport === "function" ? muestreoExport() : null, rol: c.rol || null, aportes: c.aportes || [], ensayo: {estado: ens().estado, t_fin_iso: ens().t_fin_iso, check: ens().check || {}}, tramos: c.tramos, parametros: c.params, programacion: c.programacion, registro_estaciones: Object.fromEntries(Object.entries(c.registros).map(([id, r]) => [punto(id)?.nombre || id, r])), aforos: c.aforos, eventos: c.eventos, observaciones: c.observaciones};
 }
 function blobJson() { const b = new Blob([JSON.stringify(datosExport(), null, 1)], {type: "application/json"}); C().exp = Date.now() + 1; guardar(true); pintarResp(); const u = $("ult-resp"); if (u) u.textContent = new Date(C().exp).toLocaleString("es-CO"); return b; }
 function csv() {
   const c = C(), d = datosExport(), q = v => '"' + String(v ?? "").replace(/"/g, '""') + '"', L = [];
   L.push(["Campaña", c.nombre], ["Fecha", c.fecha], ["Responsable", c.responsable], ["Cuadrilla", c.cuadrilla], ["Condiciones", c.clima], [], ["Masa de sal (kg)", c.inyeccion.masa_kg], ["Pureza", c.inyeccion.pureza], ["Agua (L)", c.inyeccion.agua_l], ["Hora de inyección", c.inyeccion.hora], ["Sal", c.inyeccion.sal], ["Estado del ensayo", ens().estado], ["Fin del ensayo", ens().t_fin_iso || ""], [],
-    ["N°", "Punto", "Función", "Latitud", "Longitud", "Precisión (m)", "Abscisa (m)", "Dist. al anterior (m)", "Origen de la distancia", "Dist. desde inyección (m)", "Cota (m)", "Sonda", "Inicio real", "Fin real", "EC fondo", "Hora del pico", "Notas"]);
-  d.puntos.forEach((p, i) => { const r = c.registros[p.id] || {}; L.push([i + 1, p.nombre, p.rol, p.lat, p.lon, p.precision_m, p.abscisa_m?.toFixed(1), p.dist_anterior_m?.toFixed(1), p.origen_distancia, p.dist_desde_inyeccion_m?.toFixed(1), p.cota, r.sonda, r.inicio, r.fin, r.ec_fondo, r.pico, p.notas || r.notas]); });
+    ["N°", "Punto", "Función", "Latitud", "Longitud", "Precisión (m)", "Abscisa (m)", "Dist. recta al anterior (m)", "Dist. real al anterior (m)", "Origen de la distancia", "Dist. desde inyección (m)", "Cota (m)", "Sonda", "Inicio real", "Fin real", "EC fondo", "Hora del pico", "Notas"]);
+  d.puntos.forEach((p, i) => { const r = c.registros[p.id] || {}; L.push([i + 1, p.nombre, p.rol, p.lat, p.lon, p.precision_m, p.abscisa_m?.toFixed(1), p.dist_recta_anterior_m?.toFixed(1), p.dist_anterior_m?.toFixed(1), p.origen_distancia, p.dist_desde_inyeccion_m?.toFixed(1), p.cota, r.sonda, r.inicio, r.fin, r.ec_fondo, r.pico, p.notas || r.notas]); });
   L.push([], ["Aforo: punto", "Q (L/s)", "Hora", "Método"]); c.aforos.forEach(a => L.push([a.punto, a.q_ls, a.hora, a.metodo]));
   L.push([], ["Hora", "Evento"]); c.eventos.forEach(e => L.push([e.hora, e.texto])); L.push([], ["Observaciones", c.observaciones]); if (typeof muestreoCsv === "function") muestreoCsv().forEach(r => L.push(r));
   return new Blob(["﻿" + L.map(r => r.map(q).join(";")).join("\r\n")], {type: "text/csv;charset=utf-8"});
@@ -689,23 +665,23 @@ function csv() {
 function gpx() {
   const c = C(), x = esc;
   return new Blob([`<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Campo trazadores" xmlns="http://www.topografix.com/GPX/1/1">\n<metadata><name>${x(c.nombre)}</name></metadata>\n` + c.puntos.filter(p => isFinite(p.lat)).map(p => `<wpt lat="${p.lat}" lon="${p.lon}">${p.cota != null ? "<ele>" + p.cota + "</ele>" : ""}<name>${x(p.nombre)}</name><desc>${x(ROLES.find(r => r[0] === p.rol)?.[1] || "")}${p.acc ? " · ±" + p.acc + " m" : ""}</desc></wpt>`).join("\n") + "\n" +
-    c.tramos.map(t => `<trk><name>${x((punto(t.de)?.nombre || "?") + " → " + (punto(t.a)?.nombre || "?"))}</name><trkseg>` + t.pts.map(p => `<trkpt lat="${p[0]}" lon="${p[1]}">${p[2] ? "<time>" + new Date(p[2]).toISOString() + "</time>" : ""}</trkpt>`).join("") + "</trkseg></trk>").join("\n") + "\n</gpx>\n"], {type: "application/gpx+xml"});
+    c.tramos.filter(t => t.linea && t.linea.length > 1).map(t => `<trk><name>${x((punto(t.de)?.nombre || "?") + " → " + (punto(t.a)?.nombre || "?"))}</name><trkseg>` + t.linea.map(p => `<trkpt lat="${p[0]}" lon="${p[1]}"></trkpt>`).join("") + "</trkseg></trk>").join("\n") + "\n</gpx>\n"], {type: "application/gpx+xml"});
 }
-function kml() {                                           // puntos + el recorrido completo en el orden del río (para cargarlos en el paso 1 de la plataforma)
+function kml() {                                           // puntos + la línea del cauce medida en el mapa (o la recta si no se midió), en el orden del río (para cargarlos en el paso 1 de la plataforma)
   const c = C(), x = esc; let ruta = [];
-  for (let i = 1; i < c.puntos.length; i++) { const a = c.puntos[i - 1], b = c.puntos[i], t = tramoEntre(a.id, b.id); let ps = t ? t.pts.map(p => [p[0], p[1]]) : [[a.lat, a.lon], [b.lat, b.lon]]; if (t && t.de === b.id) ps = ps.reverse(); ruta = ruta.concat(ps); }
+  for (let i = 1; i < c.puntos.length; i++) { const a = c.puntos[i - 1], b = c.puntos[i], t = tramoEntre(a.id, b.id); let ps = t && t.linea && t.linea.length > 1 ? t.linea.map(p => [p[0], p[1]]) : [[a.lat, a.lon], [b.lat, b.lon]]; if (t && t.de === b.id) ps = ps.reverse(); ruta = ruta.concat(ps); }
   return new Blob([`<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${x(c.nombre)}</name>\n` + c.puntos.filter(p => isFinite(p.lat)).map(p => `<Placemark><name>${x(p.nombre)}</name><description>${x(ROLES.find(r => r[0] === p.rol)?.[1] || "")}${p.acc ? " · ±" + p.acc + " m" : ""}</description><Point><coordinates>${p.lon},${p.lat},${p.cota ?? 0}</coordinates></Point></Placemark>`).join("\n") +
-    (ruta.length > 1 ? `\n<Placemark><name>Recorrido</name><LineString><tessellate>1</tessellate><coordinates>${ruta.map(p => p[1] + "," + p[0] + ",0").join(" ")}</coordinates></LineString></Placemark>` : "") + "\n</Document></kml>\n"], {type: "application/vnd.google-earth.kml+xml"});
+    (ruta.length > 1 ? `\n<Placemark><name>Cauce</name><LineString><tessellate>1</tessellate><coordinates>${ruta.map(p => p[1] + "," + p[0] + ",0").join(" ")}</coordinates></LineString></Placemark>` : "") + "\n</Document></kml>\n"], {type: "application/vnd.google-earth.kml+xml"});
 }
 let PROMPT_INSTALAR = null;
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); PROMPT_INSTALAR = e; if (TAB === "exp") pintarGuardar(); });
 function pintarGuardar() {
   const c = C(), ios = /iphone|ipad/i.test(navigator.userAgent), instalada = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   $("t-exp").innerHTML = `<h2>Sacar los datos del teléfono</h2><div class="card" style="border-color:var(--am)"><b>¿Dónde queda lo que escribo?</b><p class="nota">Se guarda solo, automáticamente, <b>dentro de este navegador del teléfono</b>. Si borra la app, la desinstala o limpia los datos del navegador, <b>se pierde</b>. La copia segura es el archivo <b>.json</b>: descárguelo o compártalo (WhatsApp, correo, Drive) al terminar cada tramo del trabajo y siempre antes de borrar o reinstalar la app. Almacenamiento protegido por el navegador: <b>${DB.persistente ? "sí" : "no confirmado"}</b>.</p><p class="nota"><b>Varias personas:</b> para repartir la campaña, el coordinador toca «Compartir» y los demás cargan ese archivo; cada uno elige su rol en «Ensayo». Al terminar, cada uno envía su archivo al coordinador, que los carga aquí y elige <b>«Combinar»</b> (puede elegir varios archivos a la vez).</p></div>
-    <p class="nota">Campaña: <b>${esc(c.nombre)}</b> · ${c.puntos.length} puntos · ${c.tramos.length} tramos grabados · último respaldo: <b id="ult-resp">${c.exp ? new Date(c.exp).toLocaleString("es-CO") : "ninguno"}</b>.</p>
+    <p class="nota">Campaña: <b>${esc(c.nombre)}</b> · ${c.puntos.length} puntos · ${c.tramos.filter(t => t.manual_m > 0).length} distancias reales · último respaldo: <b id="ult-resp">${c.exp ? new Date(c.exp).toLocaleString("es-CO") : "ninguno"}</b>.</p>
     <div class="card"><button class="b" id="x-comp" style="width:100%;margin:.2rem 0">Compartir / enviar (WhatsApp, correo, Drive…)</button>
-    <button class="b g" id="x-zip" style="width:100%;margin:.2rem 0">Descargar todo con fotos (.zip)</button><button class="b g" id="x-json" style="width:100%;margin:.2rem 0">Descargar solo los datos (.json)</button><button class="b g" id="x-kml" style="width:100%;margin:.2rem 0">Puntos y recorrido (.kml) — para Google Earth y el paso 1</button>
-    <button class="b g" id="x-gpx" style="width:100%;margin:.2rem 0">Puntos y recorrido (.gpx)</button><button class="b g" id="x-csv" style="width:100%;margin:.2rem 0">Resumen (.csv) — para Excel</button><p class="nota" id="x-msg"></p></div>
+    <button class="b g" id="x-zip" style="width:100%;margin:.2rem 0">Descargar todo con fotos (.zip)</button><button class="b g" id="x-json" style="width:100%;margin:.2rem 0">Descargar solo los datos (.json)</button><button class="b g" id="x-kml" style="width:100%;margin:.2rem 0">Puntos y cauce (.kml) — para Google Earth y el paso 1</button>
+    <button class="b g" id="x-gpx" style="width:100%;margin:.2rem 0">Puntos y cauce (.gpx)</button><button class="b g" id="x-csv" style="width:100%;margin:.2rem 0">Resumen (.csv) — para Excel</button><p class="nota" id="x-msg"></p></div>
     <h2>Cargar una campaña guardada</h2><div class="card"><input type="file" id="x-file" accept="*/*" multiple><p class="nota" id="x-file-msg" style="font-weight:600"></p><p class="nota">Para continuar una campaña o recuperarla (el archivo .json de «Descargar todo» o «Compartir»). Si el selector solo muestra el teléfono, toque el menú ☰ (arriba a la izquierda) y elija <b>Drive</b>; si Drive no aparece, abra el archivo en la app de Drive, toque ⋮ → <b>Descargar</b> y búsquelo en «Descargas».</p></div>
     <details class="card"><summary><b>Si no logra elegir el archivo: pegar su contenido</b></summary><p class="nota">Abra el .json en el teléfono (Drive lo muestra como texto), toque «seleccionar todo», copie y pegue aquí.</p><textarea id="x-pegar" placeholder="Pegue aquí todo el texto del archivo .json" style="min-height:6rem"></textarea><button class="b g" id="x-pegar-ok" style="margin-top:.4rem">Cargar el texto pegado</button></details>
     <h2>Campañas en este teléfono</h2><div class="card">${DB.campanas.map(k => `<div class="pt" style="padding:.25rem 0"><span>${esc(k.nombre)} <span class="nota">(${k.puntos.length} puntos)</span></span>${DB.campanas.length > 1 ? `<button class="b g p" data-del="${k.id}" style="color:var(--ro)">Borrar</button>` : ""}</div>`).join("")}</div>
@@ -756,16 +732,15 @@ function pintarGuardar() {
 }
 
 // ------------------------------------------------------------------ arranque
-const APP_VERSION = "campo-v35";
+const APP_VERSION = "campo-v36";
 if ("serviceWorker" in navigator) {
   const habiaControl = !!navigator.serviceWorker.controller; let recargado = false;
-  navigator.serviceWorker.addEventListener("controllerchange", () => { if (!habiaControl || recargado || REC) return; recargado = true; location.reload(); });      // versión nueva lista: recarga (los datos están en el teléfono; no se recarga a mitad de un recorrido)
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (!habiaControl || recargado) return; recargado = true; location.reload(); });      // versión nueva lista: recarga (los datos están en el teléfono)
   navigator.serviceWorker.register("sw.js").then(r => r.update && r.update()).catch(() => {});
 }
 async function actualizarApp() {
   try { const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(r => r.unregister())); const ks = await caches.keys(); await Promise.all(ks.map(k => caches.delete(k))); } catch (e) {}
   location.reload();
 }
-window.addEventListener("beforeunload", ev => { if (REC) { ev.preventDefault(); ev.returnValue = ""; } });
 try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().then(ok => { DB.persistente = ok; guardar(true); }); } catch (e) {}
 pintarCabecera(); pintarGPS(); mostrar();
